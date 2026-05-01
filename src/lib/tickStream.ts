@@ -22,7 +22,7 @@ const defaultSubscribePayload = (pair: string) => {
   };
 };
 
-type MessageParser = (raw: WebSocket.RawData) => Tick[] | null;
+type MessageParser = (raw: WebSocket.RawData) => Omit<Tick, "symbol">[] | null;
 
 const coerceNumber = (value: unknown): number | null => {
   if (typeof value === "number") {
@@ -76,8 +76,9 @@ export class AsterTickStream {
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private lastMessageTime = 0;
   private reconnectTimeout: NodeJS.Timeout | null = null;
-  private readonly heartbeatIntervalMs = 10_000; // 10 seconds
-  private readonly wsTimeoutMs = 5_000; // 5 seconds
+  // Adjusted timeouts to prevent aggressive disconnects on low-volume pairs
+  private readonly heartbeatIntervalMs = 30_000; // 30 seconds
+  private readonly wsTimeoutMs = 60_000; // 60 seconds
   private reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 10;
 
@@ -142,7 +143,7 @@ export class AsterTickStream {
         return;
       }
       ticks.forEach((tick) => {
-        this.emitter.emit("tick", tick);
+        this.emitter.emit("tick", { ...tick, symbol: this.pairSymbol });
       });
     });
 

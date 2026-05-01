@@ -9,6 +9,7 @@ import { VirtualBarBuilder } from "./src/lib/virtualBarBuilder";
 import { WatermellonEngine } from "./src/lib/watermellonEngine";
 import { PeachHybridEngine } from "./src/lib/peachHybridEngine";
 import { DryRunExecutor } from "./src/lib/execution/dryRunExecutor";
+import { PaperExecutor } from "./src/lib/execution/paperExecutor";
 import { loadConfig } from "./src/lib/config";
 import type { Tick, SyntheticBar, WatermellonConfig, PeachConfig } from "./src/lib/types";
 
@@ -52,13 +53,13 @@ try {
   const builder = new VirtualBarBuilder(30000); // 30 second bars
   const now = Date.now();
   const ticks: Tick[] = [
-    { timestamp: now, price: 100, size: 1 },
-    { timestamp: now + 5000, price: 101, size: 2 },
-    { timestamp: now + 10000, price: 102, size: 1.5 },
-    { timestamp: now + 15000, price: 103, size: 2 },
-    { timestamp: now + 20000, price: 104, size: 1 },
-    { timestamp: now + 25000, price: 105, size: 2 },
-    { timestamp: now + 30000, price: 106, size: 1 }, // This should close the bar
+    { symbol: "TEST", timestamp: now, price: 100, size: 1 },
+    { symbol: "TEST", timestamp: now + 5000, price: 101, size: 2 },
+    { symbol: "TEST", timestamp: now + 10000, price: 102, size: 1.5 },
+    { symbol: "TEST", timestamp: now + 15000, price: 103, size: 2 },
+    { symbol: "TEST", timestamp: now + 20000, price: 104, size: 1 },
+    { symbol: "TEST", timestamp: now + 25000, price: 105, size: 2 },
+    { symbol: "TEST", timestamp: now + 30000, price: 106, size: 1 }, // This should close the bar
   ];
 
   let barCount = 0;
@@ -173,6 +174,7 @@ console.log("\n[TEST 6] Testing Dry Run Executor...");
   try {
     const executor = new DryRunExecutor();
     const order = {
+      symbol: "TEST",
       side: "long" as const,
       size: 1000,
       leverage: 5,
@@ -182,7 +184,7 @@ console.log("\n[TEST 6] Testing Dry Run Executor...");
     };
     
     await executor.enterLong(order);
-    await executor.closePosition("test-close");
+    await executor.closePosition("TEST", "test-close");
     
     const logs = executor.logs;
     console.log(`  Executor logged ${logs.length} entries`);
@@ -219,11 +221,42 @@ try {
   console.error("❌ Configuration Loading test failed:", error);
 }
 
+// Test 9: Paper Trading Executor
+console.log("\n[TEST 9] Testing Paper Trading Executor...");
+(async () => {
+  try {
+    const paper = new PaperExecutor(10000);
+    const order = {
+      symbol: "TEST",
+      side: "long" as const,
+      size: 1000,
+      leverage: 5,
+      price: 100,
+      signalReason: "test",
+      timestamp: Date.now(),
+    };
+    
+    await paper.enterLong(order);
+    await paper.closePosition("TEST", "test-close", { price: 110 }); // $10 profit per unit
+    
+    const logs = paper.logs;
+    console.log(`  Executor logged ${logs.length} entries`);
+    console.log(`  Virtual balance is now ${paper.virtualBalance}`);
+    if (paper.virtualBalance === 10000 + (10 * 1000)) {
+        console.log("✅ Paper Trading Executor test passed");
+    } else {
+        console.log("❌ Paper Trading Executor test failed - balance mismatch");
+    }
+  } catch (error) {
+    console.error("❌ Paper Trading Executor test failed:", error);
+  }
+})();
+
 // Test 8: Type Safety Checks
 console.log("\n[TEST 8] Testing Type Safety...");
 try {
   // Test that types are properly defined
-  const testTick: Tick = { timestamp: Date.now(), price: 100, size: 1 };
+  const testTick: Tick = { symbol: "TEST", timestamp: Date.now(), price: 100, size: 1 };
   const testBar: SyntheticBar = {
     startTime: Date.now(),
     endTime: Date.now() + 30000,

@@ -8,6 +8,7 @@ import { BotRunner } from "@/lib/bot/botRunner";
 import { loadConfig } from "@/lib/config";
 import { DryRunExecutor } from "@/lib/execution/dryRunExecutor";
 import { LiveExecutor } from "@/lib/execution/liveExecutor";
+import { PaperExecutor } from "@/lib/execution/paperExecutor";
 import { AsterTickStream } from "@/lib/tickStream";
 
 async function main() {
@@ -19,7 +20,7 @@ async function main() {
     console.warn("⚠️  WARNING: BOT IS RUNNING IN LIVE MODE ⚠️");
     console.warn("=".repeat(80));
     console.warn("This bot will execute REAL trades on AsterDEX with REAL money!");
-    console.warn(`Trading pair: ${config.credentials.pairSymbol}`);
+    console.warn(`Trading pairs: ${config.credentials.pairSymbols.join(", ")}`);
     console.warn(`Max position size: ${config.risk.maxPositionSize} USDT`);
     console.warn(`Max leverage: ${config.risk.maxLeverage}x`);
     console.warn("=".repeat(80));
@@ -31,19 +32,30 @@ async function main() {
     console.log("Starting bot in LIVE mode...\n");
   }
   
-  const tickStream = new AsterTickStream(config.credentials.wsUrl, config.credentials.pairSymbol);
-  const executor =
-    config.mode === "live" ? new LiveExecutor(config.credentials) : new DryRunExecutor();
+  const tickStreams = config.credentials.pairSymbols.map(
+    (symbol) => new AsterTickStream(config.credentials.wsUrl, symbol)
+  );
+  
+  let executor;
+  if (config.mode === "live") {
+    executor = new LiveExecutor(config.credentials);
+  } else if (config.mode === "paper") {
+    executor = new PaperExecutor(config.paperTrading?.startingBalance ?? 10000);
+  } else {
+    executor = new DryRunExecutor();
+  }
   
   // Confirm which executor is being used
   if (config.mode === "live") {
     console.log("✅ Using LiveExecutor - REAL trades will be executed on AsterDEX");
     console.log(`✅ API Endpoint: ${config.credentials.rpcUrl}`);
+  } else if (config.mode === "paper") {
+    console.log(`📄 Using PaperExecutor - Simulated trades against virtual balance of ${config.paperTrading?.startingBalance ?? 10000} USDT`);
   } else {
     console.log("ℹ️  Using DryRunExecutor - No real trades will be executed");
   }
   
-  const bot = new BotRunner(config, tickStream, executor);
+  const bot = new BotRunner(config, tickStreams, executor);
 
   bot.on("log", (message, payload) => {
     if (payload) {

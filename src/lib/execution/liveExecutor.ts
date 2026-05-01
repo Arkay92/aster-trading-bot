@@ -3,11 +3,9 @@ import { ethers } from "ethers";
 import type { Credentials, ExecutionAdapter, TradeInstruction } from "../types";
 
 export class LiveExecutor implements ExecutionAdapter {
-  private readonly symbol: string;
   private readonly futuresClient: ReturnType<AsterDEX["createFuturesClient"]>;
 
   constructor(credentials: Credentials) {
-    this.symbol = this.normalizeSymbol(credentials.pairSymbol);
 
     const isTestnet = credentials.rpcUrl.includes("test") || credentials.wsUrl.includes("test");
     const sdk = new AsterDEX({
@@ -35,10 +33,11 @@ export class LiveExecutor implements ExecutionAdapter {
   }
 
   async enterLong(order: TradeInstruction): Promise<void> {
-    await this.setLeverage(order.leverage);
+    const symbol = this.normalizeSymbol(order.symbol);
+    await this.setLeverage(symbol, order.leverage);
     try {
       await this.futuresClient.newOrder({
-        symbol: this.symbol,
+        symbol: symbol,
         side: "BUY",
         type: "MARKET",
         quantity: order.size.toString(),
@@ -47,7 +46,7 @@ export class LiveExecutor implements ExecutionAdapter {
       const err = error instanceof Error ? error.message : String(error);
       if (err.includes("position side")) {
         await this.futuresClient.newOrder({
-          symbol: this.symbol,
+          symbol: symbol,
           side: "BUY",
           type: "MARKET",
           quantity: order.size.toString(),
@@ -57,14 +56,15 @@ export class LiveExecutor implements ExecutionAdapter {
         throw error;
       }
     }
-    console.log(`[LiveExecutor] Entered LONG position: ${order.size} @ ${order.price}`);
+    console.log(`[LiveExecutor] Entered LONG position: ${order.size} @ ${order.price} on ${symbol}`);
   }
 
   async enterShort(order: TradeInstruction): Promise<void> {
-    await this.setLeverage(order.leverage);
+    const symbol = this.normalizeSymbol(order.symbol);
+    await this.setLeverage(symbol, order.leverage);
     try {
       await this.futuresClient.newOrder({
-        symbol: this.symbol,
+        symbol: symbol,
         side: "SELL",
         type: "MARKET",
         quantity: order.size.toString(),
@@ -73,7 +73,7 @@ export class LiveExecutor implements ExecutionAdapter {
       const err = error instanceof Error ? error.message : String(error);
       if (err.includes("position side")) {
         await this.futuresClient.newOrder({
-          symbol: this.symbol,
+          symbol: symbol,
           side: "SELL",
           type: "MARKET",
           quantity: order.size.toString(),
@@ -83,12 +83,13 @@ export class LiveExecutor implements ExecutionAdapter {
         throw error;
       }
     }
-    console.log(`[LiveExecutor] Entered SHORT position: ${order.size} @ ${order.price}`);
+    console.log(`[LiveExecutor] Entered SHORT position: ${order.size} @ ${order.price} on ${symbol}`);
   }
 
-  async closePosition(reason: string, meta?: Record<string, unknown>): Promise<void> {
+  async closePosition(symbolArg: string, reason: string, meta?: Record<string, unknown>): Promise<void> {
+    const symbol = this.normalizeSymbol(symbolArg);
     try {
-      const position = await this.getCurrentPosition();
+      const position = await this.getCurrentPosition(symbol);
       if (!position || position.positionAmt === "0") {
         console.log("[LiveExecutor] No position to close");
         return;
@@ -105,7 +106,7 @@ export class LiveExecutor implements ExecutionAdapter {
 
       try {
         await this.futuresClient.newOrder({
-          symbol: this.symbol,
+          symbol: symbol,
           side,
           type: "MARKET",
           quantity,
@@ -116,7 +117,7 @@ export class LiveExecutor implements ExecutionAdapter {
         if (err.includes("position side")) {
           const positionSide = positionAmt > 0 ? "LONG" : "SHORT";
           await this.futuresClient.newOrder({
-            symbol: this.symbol,
+            symbol: symbol,
             side,
             type: "MARKET",
             quantity,
@@ -128,24 +129,24 @@ export class LiveExecutor implements ExecutionAdapter {
         }
       }
 
-      console.log(`[LiveExecutor] Closed position: ${reason}`, { positionAmt, side, quantity, ...meta });
+      console.log(`[LiveExecutor] Closed position on ${symbol}: ${reason}`, { positionAmt, side, quantity, ...meta });
     } catch (error) {
-      console.error(`[LiveExecutor] Failed to close position: ${reason}`, error);
+      console.error(`[LiveExecutor] Failed to close position on ${symbol}: ${reason}`, error);
       throw error;
     }
   }
 
-  private async setLeverage(leverage: number): Promise<void> {
+  private async setLeverage(symbol: string, leverage: number): Promise<void> {
     await this.futuresClient.changeLeverage({
-      symbol: this.symbol,
+      symbol: symbol,
       leverage,
     });
   }
 
-  private async getCurrentPosition(): Promise<{ positionAmt: string; symbol: string; entryPrice?: string } | null> {
+  private async getCurrentPosition(symbol: string): Promise<{ positionAmt: string; symbol: string; entryPrice?: string } | null> {
     try {
       const account = await this.futuresClient.getAccount();
-      const position = account.positions?.find((p: any) => p.symbol === this.symbol);
+      const position = account.positions?.find((p: any) => p.symbol === symbol);
       if (position && position.positionAmt !== "0") {
         return {
           positionAmt: position.positionAmt.toString(),
@@ -156,8 +157,8 @@ export class LiveExecutor implements ExecutionAdapter {
       return null;
     } catch {
       try {
-        const positions = await this.futuresClient.getPositionRisk(this.symbol);
-        const position = positions.find((p: any) => p.symbol === this.symbol);
+        const positions = await this.futuresClient.getPositionRisk(symbol);
+        const position = positions.find((p: any) => p.symbol === symbol);
         if (position && position.positionAmt !== "0") {
           return {
             positionAmt: position.positionAmt.toString(),

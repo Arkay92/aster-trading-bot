@@ -1,16 +1,11 @@
 {
   "position": {
-    "size": 120,
-    "side": "long",
-    "avgEntry": 1.22,
+    "size": 0,
+    "side": "flat",
+    "avgEntry": 0,
     "unrealizedPnl": 0,
-    "lastUpdate": 1763681674643,
-    "pendingOrder": {
-      "side": "long",
-      "size": 120,
-      "timestamp": 1763681429875
-    }
+    "lastUpdate": 1777669683502
   },
-  "lastBarCloseTime": 1763681675047,
-  "timestamp": 1763681675109
+  "lastBarCloseTime": 1777669750495,
+  "timestamp": 1777669749917
 }

@@ -17,6 +17,8 @@ const envSchema = z.object({
   REQUIRE_TRENDING_MARKET: z.coerce.boolean().optional(),
   ADX_THRESHOLD: z.coerce.number().min(0).max(100).optional(),
   MODE: z.enum(["dry-run", "live"]),
+  PAPER_TRADING: z.coerce.boolean().optional(),
+  PAPER_STARTING_BALANCE: z.coerce.number().positive().optional(),
   STRATEGY_TYPE: z.enum(["watermellon", "peach-hybrid"]).optional(),
   VIRTUAL_TIMEFRAME_MS: z.coerce.number().optional(),
   // Watermellon params
@@ -68,40 +70,40 @@ export const loadConfig = (overrides?: Partial<AppConfig>): AppConfig => {
   if (strategyType === "peach-hybrid") {
     // Peach Hybrid Strategy
     strategy = {
-      timeframeMs: env.VIRTUAL_TIMEFRAME_MS ?? 30_000,
+      timeframeMs: env.VIRTUAL_TIMEFRAME_MS || 30_000,
       v1: {
-        emaFastLen: env.PEACH_V1_EMA_FAST ?? 8,
-        emaMidLen: env.PEACH_V1_EMA_MID ?? 21,
-        emaSlowLen: env.PEACH_V1_EMA_SLOW ?? 48,
-        emaMicroFastLen: env.PEACH_V1_EMA_MICRO_FAST ?? 5,
-        emaMicroSlowLen: env.PEACH_V1_EMA_MICRO_SLOW ?? 13,
-        rsiLength: env.PEACH_V1_RSI_LENGTH ?? 14,
-        rsiMinLong: env.PEACH_V1_RSI_MIN_LONG ?? 42.0,
-        rsiMaxShort: env.PEACH_V1_RSI_MAX_SHORT ?? 58.0,
-        minBarsBetween: env.PEACH_V1_MIN_BARS_BETWEEN ?? 1,
-        minMovePercent: env.PEACH_V1_MIN_MOVE_PCT ?? 0.10,
+        emaFastLen: env.PEACH_V1_EMA_FAST || 8,
+        emaMidLen: env.PEACH_V1_EMA_MID || 21,
+        emaSlowLen: env.PEACH_V1_EMA_SLOW || 48,
+        emaMicroFastLen: env.PEACH_V1_EMA_MICRO_FAST || 5,
+        emaMicroSlowLen: env.PEACH_V1_EMA_MICRO_SLOW || 13,
+        rsiLength: env.PEACH_V1_RSI_LENGTH || 14,
+        rsiMinLong: env.PEACH_V1_RSI_MIN_LONG || 42.0,
+        rsiMaxShort: env.PEACH_V1_RSI_MAX_SHORT || 58.0,
+        minBarsBetween: env.PEACH_V1_MIN_BARS_BETWEEN || 1,
+        minMovePercent: env.PEACH_V1_MIN_MOVE_PCT || 0.10,
       },
       v2: {
-        emaFastLen: env.PEACH_V2_EMA_FAST ?? 3,
-        emaMidLen: env.PEACH_V2_EMA_MID ?? 8,
-        emaSlowLen: env.PEACH_V2_EMA_SLOW ?? 13,
-        rsiMomentumThreshold: env.PEACH_V2_RSI_MOMENTUM_THRESHOLD ?? 3.0,
-        volumeLookback: env.PEACH_V2_VOLUME_LOOKBACK ?? 4,
-        volumeMultiplier: env.PEACH_V2_VOLUME_MULTIPLIER ?? 1.5,
-        exitVolumeMultiplier: env.PEACH_V2_EXIT_VOLUME_MULTIPLIER ?? 1.2,
+        emaFastLen: env.PEACH_V2_EMA_FAST || 3,
+        emaMidLen: env.PEACH_V2_EMA_MID || 8,
+        emaSlowLen: env.PEACH_V2_EMA_SLOW || 13,
+        rsiMomentumThreshold: env.PEACH_V2_RSI_MOMENTUM_THRESHOLD || 3.0,
+        volumeLookback: env.PEACH_V2_VOLUME_LOOKBACK || 4,
+        volumeMultiplier: env.PEACH_V2_VOLUME_MULTIPLIER || 1.5,
+        exitVolumeMultiplier: env.PEACH_V2_EXIT_VOLUME_MULTIPLIER || 1.2,
       },
     };
   } else {
     // Watermellon Strategy (default)
     strategy = {
       ...defaultWatermellonConfig,
-      timeframeMs: env.VIRTUAL_TIMEFRAME_MS ?? defaultWatermellonConfig.timeframeMs,
-      emaFastLen: env.EMA_FAST ?? defaultWatermellonConfig.emaFastLen,
-      emaMidLen: env.EMA_MID ?? defaultWatermellonConfig.emaMidLen,
-      emaSlowLen: env.EMA_SLOW ?? defaultWatermellonConfig.emaSlowLen,
-      rsiLength: env.RSI_LENGTH ?? defaultWatermellonConfig.rsiLength,
-      rsiMinLong: env.RSI_MIN_LONG ?? defaultWatermellonConfig.rsiMinLong,
-      rsiMaxShort: env.RSI_MAX_SHORT ?? defaultWatermellonConfig.rsiMaxShort,
+      timeframeMs: env.VIRTUAL_TIMEFRAME_MS || defaultWatermellonConfig.timeframeMs,
+      emaFastLen: env.EMA_FAST || defaultWatermellonConfig.emaFastLen,
+      emaMidLen: env.EMA_MID || defaultWatermellonConfig.emaMidLen,
+      emaSlowLen: env.EMA_SLOW || defaultWatermellonConfig.emaSlowLen,
+      rsiLength: env.RSI_LENGTH || defaultWatermellonConfig.rsiLength,
+      rsiMinLong: env.RSI_MIN_LONG || defaultWatermellonConfig.rsiMinLong,
+      rsiMaxShort: env.RSI_MAX_SHORT || defaultWatermellonConfig.rsiMaxShort,
     };
   }
 
@@ -119,15 +121,21 @@ export const loadConfig = (overrides?: Partial<AppConfig>): AppConfig => {
     adxThreshold: env.ADX_THRESHOLD ?? 25,
   };
 
+  const isPaper = env.PAPER_TRADING ?? false;
+  const mode = isPaper ? "paper" : env.MODE;
+
   const config: AppConfig = {
-    mode: env.MODE as Mode,
+    mode: mode as Mode,
+    paperTrading: isPaper
+      ? { enabled: true, startingBalance: env.PAPER_STARTING_BALANCE ?? 10000 }
+      : undefined,
     strategyType: strategyType as "watermellon" | "peach-hybrid",
     credentials: {
       rpcUrl: env.ASTER_RPC_URL,
       wsUrl: env.ASTER_WS_URL,
       apiKey: env.ASTER_API_KEY,
       privateKey: env.ASTER_PRIVATE_KEY,
-      pairSymbol: env.PAIR_SYMBOL,
+      pairSymbols: env.PAIR_SYMBOL.split(",").map((s) => s.trim()).filter(Boolean),
     },
     strategy,
     risk,

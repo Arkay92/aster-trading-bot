@@ -23,7 +23,7 @@ type AsterBalanceResponse = {
 };
 
 export class RestPoller {
-  private readonly symbol: string;
+  private readonly symbols: string[];
   private intervalId: NodeJS.Timeout | null = null;
   private onPositionUpdate?: (position: AsterPositionResponse) => void;
   private onBalanceUpdate?: (balance: AsterBalanceResponse[]) => void;
@@ -32,7 +32,7 @@ export class RestPoller {
   private readonly futuresClient: ReturnType<AsterDEX["createFuturesClient"]>;
 
   constructor(credentials: Credentials) {
-    this.symbol = this.normalizeSymbol(credentials.pairSymbol);
+    this.symbols = credentials.pairSymbols.map((s) => this.normalizeSymbol(s));
 
     const isTestnet = credentials.rpcUrl.includes("test") || credentials.wsUrl.includes("test");
     const sdk = new AsterDEX({
@@ -109,7 +109,13 @@ export class RestPoller {
   private async fetchPosition(): Promise<void> {
     try {
       const account = await this.futuresClient.getAccount();
-      const pos = account.positions?.find((p: any) => p.symbol === this.symbol);
+      // Find any open position in our symbols
+      let pos = account.positions?.find((p: any) => this.symbols.includes(p.symbol) && p.positionAmt !== "0");
+      // If none open, default to the first symbol to report flat
+      if (!pos && this.symbols.length > 0) {
+        pos = account.positions?.find((p: any) => p.symbol === this.symbols[0]);
+      }
+      
       if (pos) {
         this.onPositionUpdate?.(pos as any);
       } else {
@@ -123,21 +129,24 @@ export class RestPoller {
           marginType: "cross",
           isolatedMargin: "0",
           positionSide: "BOTH",
-          symbol: this.symbol,
+          symbol: this.symbols[0] || "UNKNOWN",
         });
       }
 
       const now = Date.now();
       if (!this.lastSuccessLog || now - this.lastSuccessLog > 60000) {
-        console.log(`[RestPoller] Position poll successful (symbol: ${this.symbol}, position: ${pos?.positionAmt || "0"})`);
+        console.log(`[RestPoller] Position poll successful (symbol: ${pos?.symbol || this.symbols[0]}, position: ${pos?.positionAmt || "0"})`);
         this.lastSuccessLog = now;
       }
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       console.warn(`[RestPoller] Account endpoint failed, trying fallback: ${err.message}`);
       try {
-        const position = await this.futuresClient.getPositionRisk(this.symbol);
-        const pos = position.find((p: any) => p.symbol === this.symbol);
+        const position = await this.futuresClient.getPositionRisk(this.symbols[0]); // Fallback might only work per-symbol, but let's try the first
+        let pos = position.find((p: any) => this.symbols.includes(p.symbol) && p.positionAmt !== "0");
+        if (!pos && this.symbols.length > 0) {
+          pos = position.find((p: any) => p.symbol === this.symbols[0]);
+        }
         if (pos) {
           this.onPositionUpdate?.(pos as any);
         } else {
@@ -151,7 +160,7 @@ export class RestPoller {
             marginType: "cross",
             isolatedMargin: "0",
             positionSide: "BOTH",
-            symbol: this.symbol,
+            symbol: this.symbols[0] || "UNKNOWN",
           });
         }
       } catch (fallbackError) {

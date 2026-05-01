@@ -1,4 +1,5 @@
 export type Tick = {
+  symbol: string;
   timestamp: number;
   price: number;
   size?: number;
@@ -109,18 +110,22 @@ export type RiskConfig = {
   adxThreshold?: number; // ADX threshold for trending market (default: 25)
 };
 
-export type Mode = "dry-run" | "live";
+export type Mode = "dry-run" | "live" | "paper";
 
 export type Credentials = {
   rpcUrl: string;
   wsUrl: string;
   apiKey: string;
   privateKey: string;
-  pairSymbol: string;
+  pairSymbols: string[];
 };
 
 export type AppConfig = {
   mode: Mode;
+  paperTrading?: {
+    enabled: boolean;
+    startingBalance: number;
+  };
   credentials: Credentials;
   strategy: WatermellonConfig | PeachConfig;
   risk: RiskConfig;
@@ -132,11 +137,13 @@ export type PositionSide = "long" | "short" | "flat";
 export type PositionState = {
   side: PositionSide;
   size: number;
+  symbol?: string;
   entryPrice?: number;
   openedAt?: number;
 };
 
 export type TradeInstruction = {
+  symbol: string;
   side: Exclude<PositionSide, "flat">;
   size: number;
   leverage: number;
@@ -148,6 +155,6 @@ export type TradeInstruction = {
 export type ExecutionAdapter = {
   enterLong(order: TradeInstruction): Promise<void>;
   enterShort(order: TradeInstruction): Promise<void>;
-  closePosition(reason: string, meta?: Record<string, unknown>): Promise<void>;
+  closePosition(symbol: string, reason: string, meta?: Record<string, unknown>): Promise<void>;
 };
 

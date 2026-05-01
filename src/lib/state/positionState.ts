@@ -1,6 +1,7 @@
 export type LocalPositionState = {
   size: number;
   side: "long" | "short" | "flat";
+  symbol?: string;
   avgEntry: number;
   unrealizedPnl: number;
   lastUpdate: number;

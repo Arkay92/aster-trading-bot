@@ -165,8 +165,8 @@ class TradeStatistics {
 
 export class BotRunner {
   private readonly emitter = new EventEmitter();
-  private readonly barBuilder: VirtualBarBuilder;
-  private readonly engine: WatermellonEngine | PeachHybridEngine;
+  private readonly barBuilders = new Map<string, VirtualBarBuilder>();
+  private readonly engines = new Map<string, WatermellonEngine | PeachHybridEngine>();
   private readonly restPoller: RestPoller;
   private readonly stateManager: PositionStateManager;
   private readonly orderTracker: OrderTracker;
@@ -178,7 +178,7 @@ export class BotRunner {
   private tradingFrozen = false;
   private freezeUntil = 0;
   private processedSignals = new Set<string>(); // Event deduplication
-  private lastBarCloseTime = 0;
+  private lastBarCloseTimes = new Map<string, number>();
   private readonly isPeachHybrid: boolean;
   // Trailing stop loss tracking
   private highestPrice: number | null = null; // For long positions
@@ -186,7 +186,7 @@ export class BotRunner {
 
   constructor(
     private readonly config: AppConfig,
-    private readonly tickStream: TickStream,
+    private readonly tickStreams: TickStream[],
     private readonly executor: ExecutionAdapter,
   ) {
     this.isPeachHybrid = config.strategyType === "peach-hybrid";
@@ -194,13 +194,14 @@ export class BotRunner {
       ? (config.strategy as PeachConfig).timeframeMs 
       : (config.strategy as WatermellonConfig).timeframeMs;
     
-    this.barBuilder = new VirtualBarBuilder(timeframeMs);
-    
-    // Initialize appropriate engine
-    if (this.isPeachHybrid) {
-      this.engine = new PeachHybridEngine(config.strategy as PeachConfig);
-    } else {
-      this.engine = new WatermellonEngine(config.strategy as WatermellonConfig);
+    // Initialize engines and builders for each symbol
+    for (const symbol of config.credentials.pairSymbols) {
+      this.barBuilders.set(symbol, new VirtualBarBuilder(timeframeMs));
+      if (this.isPeachHybrid) {
+        this.engines.set(symbol, new PeachHybridEngine(config.strategy as PeachConfig));
+      } else {
+        this.engines.set(symbol, new WatermellonEngine(config.strategy as WatermellonConfig));
+      }
     }
     
     this.restPoller = new RestPoller(config.credentials);
@@ -213,11 +214,15 @@ export class BotRunner {
   private loadWarmState(): void {
     const saved = this.statePersistence.load();
     if (saved) {
-      this.lastBarCloseTime = saved.lastBarCloseTime;
+      // Warm state is tricky with multiple pairs, so we just use the global close time for all
+      for (const symbol of this.config.credentials.pairSymbols) {
+        this.lastBarCloseTimes.set(symbol, saved.lastBarCloseTime);
+      }
       this.stateManager.updateLocalState(saved.position);
       this.position = {
         side: saved.position.side,
         size: saved.position.size,
+        symbol: saved.position.symbol,
         entryPrice: saved.position.avgEntry > 0 ? saved.position.avgEntry : undefined,
       };
       this.log("Warm state loaded", {
@@ -230,15 +235,24 @@ export class BotRunner {
 
   private saveState(): void {
     const state = this.stateManager.getState();
+    const latestTime = Math.max(...Array.from(this.lastBarCloseTimes.values()), 0);
     this.statePersistence.save({
       position: state,
-      lastBarCloseTime: this.lastBarCloseTime,
+      lastBarCloseTime: latestTime,
     });
   }
 
   async start() {
     this.subscribe();
-    this.startRestPolling();
+
+    if (this.config.mode === "paper") {
+      this.log("Paper mode: Bypassing RestPoller");
+      if (this.config.paperTrading?.enabled) {
+        this.usdtBalance = this.config.paperTrading.startingBalance;
+      }
+    } else {
+      this.startRestPolling();
+    }
     
     // Wait a moment for initial balance fetch
     this.log("Waiting for initial balance fetch...");
@@ -260,7 +274,9 @@ export class BotRunner {
       });
     }
     
-    await this.tickStream.start();
+    for (const stream of this.tickStreams) {
+      await stream.start();
+    }
     const timeframeMs = this.isPeachHybrid 
       ? (this.config.strategy as PeachConfig).timeframeMs 
       : (this.config.strategy as WatermellonConfig).timeframeMs;
@@ -269,7 +285,9 @@ export class BotRunner {
 
   async stop() {
     this.restPoller.stop();
-    await this.tickStream.stop();
+    for (const stream of this.tickStreams) {
+      await stream.stop();
+    }
     this.unsubscribers.forEach((off) => off());
     this.unsubscribers = [];
     this.emitter.emit("stop");
@@ -384,66 +402,75 @@ export class BotRunner {
   }
 
   private subscribe() {
-    const offTick = this.tickStream.on("tick", (tick: unknown) => {
-      if (tick && typeof tick === "object" && "price" in tick && "timestamp" in tick) {
-        this.handleTick(tick as Tick);
-      }
-    });
-    const offError = this.tickStream.on("error", (error: unknown) => {
-      const err = error instanceof Error ? error : new Error(String(error));
-      this.log("Tick stream error", { error: err });
-    });
-    const offClose = this.tickStream.on("close", () => this.log("Tick stream closed"));
-    this.unsubscribers.push(offTick, offError, offClose);
+    for (const stream of this.tickStreams) {
+      const offTick = stream.on("tick", (tick: unknown) => {
+        if (tick && typeof tick === "object" && "price" in tick && "timestamp" in tick && "symbol" in tick) {
+          this.handleTick(tick as Tick);
+        }
+      });
+      const offError = stream.on("error", (error: unknown) => {
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.log("Tick stream error", { error: err });
+      });
+      const offClose = stream.on("close", () => this.log("Tick stream closed"));
+      this.unsubscribers.push(offTick, offError, offClose);
+    }
   }
 
   private handleTick(tick: Tick) {
-    const { closedBar } = this.barBuilder.pushTick(tick);
+    const builder = this.barBuilders.get(tick.symbol);
+    if (!builder) return;
+    
+    const { closedBar } = builder.pushTick(tick);
     if (closedBar) {
-      this.evaluateProtectiveExits(closedBar);
-      this.handleBarClose(closedBar);
+      this.evaluateProtectiveExits(tick.symbol, closedBar);
+      this.handleBarClose(tick.symbol, closedBar);
     }
   }
 
-  private handleBarClose(bar: SyntheticBar) {
+  private handleBarClose(symbol: string, bar: SyntheticBar) {
+    const engine = this.engines.get(symbol);
+    if (!engine) return;
+
     // Deduplication: prevent processing same bar multiple times
-    if (bar.endTime <= this.lastBarCloseTime) {
+    const lastTime = this.lastBarCloseTimes.get(symbol) || 0;
+    if (bar.endTime <= lastTime) {
       return;
     }
-    this.lastBarCloseTime = bar.endTime;
+    this.lastBarCloseTimes.set(symbol, bar.endTime);
 
     // Check if trading is frozen
     if (this.tradingFrozen) {
       if (Date.now() < this.freezeUntil) {
-        this.log("Skipping signal - trading frozen", { freezeUntil: this.freezeUntil });
+        this.log(`Skipping signal on ${symbol} - trading frozen`, { freezeUntil: this.freezeUntil });
         return;
       }
       this.tradingFrozen = false;
     }
 
     // Check Peach exit conditions first (before checking for new signals)
-    if (this.position.side !== "flat" && this.isPeachHybrid) {
-      const exitSignal = (this.engine as PeachHybridEngine).checkExitConditions(bar);
+    if (this.position.side !== "flat" && this.isPeachHybrid && this.position.symbol === symbol) {
+      const exitSignal = (engine as PeachHybridEngine).checkExitConditions(bar);
       if (exitSignal.shouldExit) {
-        this.log("Peach exit condition triggered", { reason: exitSignal.reason, details: exitSignal.details });
-        this.closePosition(exitSignal.reason, exitSignal.details);
+        this.log(`Peach exit condition triggered on ${symbol}`, { reason: exitSignal.reason, details: exitSignal.details });
+        this.closePosition(symbol, exitSignal.reason, exitSignal.details);
         return;
       }
     }
 
     // Update engine with bar (Peach needs full bar, Watermellon just needs close)
     const signal = this.isPeachHybrid
-      ? (this.engine as PeachHybridEngine).update(bar)
-      : (this.engine as WatermellonEngine).update(bar.close);
+      ? (engine as PeachHybridEngine).update(bar)
+      : (engine as WatermellonEngine).update(bar.close);
     
     // Log indicator values less frequently (every 10 bars) to reduce noise
-    if (this.isPeachHybrid && this.lastBarCloseTime % 10 === 0) {
-      const indicators = (this.engine as PeachHybridEngine).getIndicatorValues();
+    if (this.isPeachHybrid && (bar.endTime / 1000) % 10 === 0) {
+      const indicators = (engine as PeachHybridEngine).getIndicatorValues();
       const { requireTrendingMarket, adxThreshold } = this.config.risk;
       const adxReady = indicators.adx !== null;
-      const marketRegimeOk = !requireTrendingMarket || (adxReady && (this.engine as PeachHybridEngine).shouldAllowTrading(adxThreshold));
+      const marketRegimeOk = !requireTrendingMarket || (adxReady && (engine as PeachHybridEngine).shouldAllowTrading(adxThreshold));
 
-      this.log("Peach indicators updated", {
+      this.log(`Peach indicators updated on ${symbol}`, {
         price: bar.close.toFixed(4),
         volume: bar.volume.toFixed(2),
         v1: {
@@ -461,14 +488,14 @@ export class BotRunner {
         adx: adxReady ? indicators.adx?.toFixed(2) : 'warming up...',
         marketRegime: requireTrendingMarket ? (adxReady ? (marketRegimeOk ? 'trending' : 'ranging') : 'warming up') : 'ignored',
       });
-    } else if (!this.isPeachHybrid && this.lastBarCloseTime % 10 === 0) {
+    } else if (!this.isPeachHybrid && (bar.endTime / 1000) % 10 === 0) {
       // Watermellon strategy logging
-      const indicators = (this.engine as WatermellonEngine).getIndicatorValues();
+      const indicators = (engine as WatermellonEngine).getIndicatorValues();
       if (indicators.emaFast !== null && indicators.emaMid !== null && indicators.emaSlow !== null && indicators.rsi !== null) {
         const bullStack = indicators.emaFast > indicators.emaMid && indicators.emaMid > indicators.emaSlow;
         const bearStack = indicators.emaFast < indicators.emaMid && indicators.emaMid < indicators.emaSlow;
 
-        this.log("Watermellon indicators updated", {
+        this.log(`Watermellon indicators updated on ${symbol}`, {
           price: bar.close.toFixed(4),
           emaFast: indicators.emaFast.toFixed(4),
           emaMid: indicators.emaMid.toFixed(4),
@@ -485,7 +512,7 @@ export class BotRunner {
     }
 
     // Event deduplication: create unique key for signal
-    const signalKey = `${signal.type}-${bar.endTime}`;
+    const signalKey = `${symbol}-${signal.type}-${bar.endTime}`;
     if (this.processedSignals.has(signalKey)) {
       return;
     }
@@ -499,19 +526,20 @@ export class BotRunner {
     }
 
     this.emitter.emit("signal", signal, bar);
-    this.log("Signal emitted", { type: signal.type, reason: signal.reason, close: bar.close });
-    this.applySignal(signal, bar);
+    this.log(`Signal emitted on ${symbol}`, { type: signal.type, reason: signal.reason, close: bar.close });
+    this.applySignal(symbol, signal, bar);
   }
 
-  private applySignal(signal: StrategySignal, bar: SyntheticBar) {
+  private applySignal(symbol: string, signal: StrategySignal, bar: SyntheticBar) {
     if (!signal) return;
 
     // Check market regime filter for Peach Hybrid
     if (this.isPeachHybrid) {
+      const engine = this.engines.get(symbol) as PeachHybridEngine;
       const { requireTrendingMarket, adxThreshold } = this.config.risk;
-      if (requireTrendingMarket && !(this.engine as PeachHybridEngine).shouldAllowTrading(adxThreshold)) {
-        this.log("Skipping signal - market not trending", {
-          adx: (this.engine as PeachHybridEngine).getIndicatorValues().adx?.toFixed(2),
+      if (requireTrendingMarket && !engine.shouldAllowTrading(adxThreshold)) {
+        this.log(`Skipping signal on ${symbol} - market not trending`, {
+          adx: engine.getIndicatorValues().adx?.toFixed(2),
           threshold: adxThreshold,
         });
         return;
@@ -522,19 +550,25 @@ export class BotRunner {
     const { maxPositionSize, maxLeverage, positionSizePct } = this.config.risk;
 
     // Calculate position size: use percentage of balance if configured, otherwise fixed amount
-    let size: number;
+    let notionalUsdt: number;
     if (positionSizePct && positionSizePct > 0) {
       // Use percentage of available balance, considering leverage
       // Add safety buffer: use 70% of calculated amount to account for fees, slippage, and margin requirements
       const availableForPosition = this.usdtBalance * (positionSizePct / 100) * 0.7;
-      size = Math.min(availableForPosition * maxLeverage, maxPositionSize);
-      // Ensure reasonable position size bounds
-      size = Math.max(size, 5); // Minimum 5 units
-      size = Math.min(size, 500); // Maximum 500 units to prevent over-leveraging
+      notionalUsdt = Math.min(availableForPosition * maxLeverage, maxPositionSize);
     } else {
-      size = maxPositionSize;
+      notionalUsdt = maxPositionSize;
+    }
+    
+    // Convert notional USDT to base currency size, rounded to 4 decimals
+    const size = Number((notionalUsdt / bar.close).toFixed(4));
+    
+    if (size <= 0) {
+      this.log("Calculated position size is 0, skipping signal");
+      return;
     }
     const order = {
+      symbol,
       size,
       leverage: maxLeverage,
       price: bar.close,
@@ -544,36 +578,36 @@ export class BotRunner {
     } as const;
 
     if (signal.type === "long") {
-      if (this.position.side === "long") {
-        return;
+      if (this.position.side !== "flat") {
+        if (this.position.symbol !== symbol) return;
+        if (this.position.side === "long") return;
+        if (!this.canFlip(timestamp)) {
+          return this.log("Flip budget exhausted, ignoring long signal");
+        }
+        this.closePosition(symbol, "flip-long", { price: bar.close });
       }
-      if (!this.canFlip(timestamp)) {
-        return this.log("Flip budget exhausted, ignoring long signal");
-      }
-      if (this.position.side === "short") {
-        this.closePosition("flip-long", { price: bar.close });
-      }
-      this.enterPosition("long", order);
+      this.enterPosition(symbol, "long", order);
       return;
     }
 
     if (signal.type === "short") {
-      if (this.position.side === "short") {
-        return;
+      if (this.position.side !== "flat") {
+        if (this.position.symbol !== symbol) return;
+        if (this.position.side === "short") return;
+        if (!this.canFlip(timestamp)) {
+          return this.log("Flip budget exhausted, ignoring short signal");
+        }
+        this.closePosition(symbol, "flip-short", { price: bar.close });
       }
-      if (!this.canFlip(timestamp)) {
-        return this.log("Flip budget exhausted, ignoring short signal");
-      }
-      if (this.position.side === "long") {
-        this.closePosition("flip-short", { price: bar.close });
-      }
-      this.enterPosition("short", order);
+      this.enterPosition(symbol, "short", order);
     }
   }
 
-  private async enterPosition(side: "long" | "short", order: Parameters<ExecutionAdapter["enterLong"]>[0]) {
+  private async enterPosition(symbol: string, side: "long" | "short", order: Parameters<ExecutionAdapter["enterLong"]>[0]) {
     // Check balance before placing order (with leverage consideration)
-    const requiredMargin = order.size / order.leverage;
+    // order.size is in base asset, so we calculate notional USDT first
+    const notionalUsdt = order.size * order.price;
+    const requiredMargin = notionalUsdt / order.leverage;
     
     // Log balance check for debugging
     this.log("Checking balance before entering position", {
@@ -630,6 +664,7 @@ export class BotRunner {
     this.position = {
       side,
       size: order.size,
+      symbol,
       entryPrice: order.price,
       openedAt: order.timestamp,
     };
@@ -639,12 +674,14 @@ export class BotRunner {
     this.stateManager.updateLocalState({
       side,
       size: order.size,
+      symbol,
       avgEntry: order.price,
     });
 
     // Update engine position state for exit logic
     if (this.isPeachHybrid) {
-      (this.engine as PeachHybridEngine).setPosition(side);
+      const engine = this.engines.get(symbol) as PeachHybridEngine;
+      engine.setPosition(side);
     }
 
     // Start tracking trade statistics
@@ -654,8 +691,8 @@ export class BotRunner {
     this.emitter.emit("position", this.position);
   }
 
-  private async closePosition(reason: string, meta?: Record<string, unknown>) {
-    if (this.position.side === "flat") {
+  private async closePosition(symbol: string, reason: string, meta?: Record<string, unknown>) {
+    if (this.position.side === "flat" || this.position.symbol !== symbol) {
       return;
     }
 
@@ -666,14 +703,15 @@ export class BotRunner {
       ? Number(meta.price)
       : this.position.entryPrice || 0;
 
-    await this.executor.closePosition(reason, meta);
+    await this.executor.closePosition(symbol, reason, meta);
 
     // Complete trade statistics
     this.tradeStats.closeTrade(exitPrice, reason);
 
     // Update engine position state
     if (this.isPeachHybrid) {
-      (this.engine as PeachHybridEngine).setPosition("flat");
+      const engine = this.engines.get(symbol) as PeachHybridEngine;
+      engine.setPosition("flat");
     }
 
     // Log trade statistics periodically
@@ -683,6 +721,17 @@ export class BotRunner {
     this.highestPrice = null;
     this.lowestPrice = null;
     this.position = { side: "flat", size: 0 };
+    
+    // In paper mode, we should update our usdtBalance to match the executor's virtual balance.
+    // However, BotRunner doesn't hold a direct reference to PaperExecutor's methods.
+    // The executor logs its PNL, but to keep the internal BotRunner balance accurate,
+    // we can calculate the local PNL and apply it to usdtBalance.
+    if (this.config.mode === "paper") {
+       const pnl = this.tradeStats.getRecentTrades(1)[0]?.pnl || 0;
+       this.usdtBalance += pnl;
+       this.log(`Virtual balance updated after trade: ${this.usdtBalance.toFixed(4)} USDT`);
+    }
+
     this.emitter.emit("position", this.position);
   }
 
@@ -701,8 +750,8 @@ export class BotRunner {
     }
   }
 
-  private evaluateProtectiveExits(bar: SyntheticBar) {
-    if (this.position.side === "flat" || !this.position.entryPrice) {
+  private evaluateProtectiveExits(symbol: string, bar: SyntheticBar) {
+    if (this.position.side === "flat" || !this.position.entryPrice || this.position.symbol !== symbol) {
       return;
     }
     const { stopLossPct, takeProfitPct, emergencyStopLoss, useStopLoss } = this.config.risk;
@@ -728,13 +777,13 @@ export class BotRunner {
           // Only activate trailing stop after 0.5% profit
           const trailingStopPrice = this.highestPrice * (1 - trailingStopPct / 100);
           if (close <= trailingStopPrice) {
-            this.log("Trailing stop-loss triggered", { 
+            this.log(`Trailing stop-loss triggered on ${symbol}`, { 
               trailingStopPrice: trailingStopPrice.toFixed(4), 
               highestPrice: this.highestPrice.toFixed(4),
               currentProfit: currentProfit.toFixed(2) + '%',
               close 
             });
-            this.closePosition("trailing-stop", { close, trailingStopPrice, highestPrice: this.highestPrice });
+            this.closePosition(symbol, "trailing-stop", { close, trailingStopPrice, highestPrice: this.highestPrice });
             return;
           }
         }
@@ -744,13 +793,13 @@ export class BotRunner {
           // Only activate trailing stop after 0.5% profit
           const trailingStopPrice = this.lowestPrice * (1 + trailingStopPct / 100);
           if (close >= trailingStopPrice) {
-            this.log("Trailing stop-loss triggered", { 
+            this.log(`Trailing stop-loss triggered on ${symbol}`, { 
               trailingStopPrice: trailingStopPrice.toFixed(4), 
               lowestPrice: this.lowestPrice.toFixed(4),
               currentProfit: currentProfit.toFixed(2) + '%',
               close 
             });
-            this.closePosition("trailing-stop", { close, trailingStopPrice, lowestPrice: this.lowestPrice });
+            this.closePosition(symbol, "trailing-stop", { close, trailingStopPrice, lowestPrice: this.lowestPrice });
             return;
           }
         }
@@ -765,8 +814,8 @@ export class BotRunner {
           : this.position.entryPrice * (1 + emergencyStopLoss / 100);
 
       if ((this.position.side === "long" && close <= emergencyThreshold) || (this.position.side === "short" && close >= emergencyThreshold)) {
-        this.log("Emergency stop-loss triggered", { threshold: emergencyThreshold, close, entryPrice: this.position.entryPrice });
-        this.closePosition("emergency-stop", { close, threshold: emergencyThreshold });
+        this.log(`Emergency stop-loss triggered on ${symbol}`, { threshold: emergencyThreshold, close, entryPrice: this.position.entryPrice });
+        this.closePosition(symbol, "emergency-stop", { close, threshold: emergencyThreshold });
         return;
       }
     }
@@ -779,8 +828,8 @@ export class BotRunner {
           : this.position.entryPrice * (1 + stopLossPct / 100);
 
       if ((this.position.side === "long" && close <= threshold) || (this.position.side === "short" && close >= threshold)) {
-        this.log("Stop-loss triggered", { threshold, close });
-        this.closePosition("stop-loss", { close, threshold });
+        this.log(`Stop-loss triggered on ${symbol}`, { threshold, close });
+        this.closePosition(symbol, "stop-loss", { close, threshold });
         return;
       }
     }
@@ -798,8 +847,8 @@ export class BotRunner {
           : this.position.entryPrice * (1 - takeProfitPct / 100);
 
       if ((this.position.side === "long" && close >= target) || (this.position.side === "short" && close <= target)) {
-        this.log("Take-profit triggered", { target, close, profitPct: profitPct.toFixed(2) + '%' });
-        this.closePosition("take-profit", { close, target });
+        this.log(`Take-profit triggered on ${symbol}`, { target, close, profitPct: profitPct.toFixed(2) + '%' });
+        this.closePosition(symbol, "take-profit", { close, target });
       }
     }
   }

@@ -15,7 +15,7 @@ export class DryRunExecutor implements ExecutionAdapter {
     this.persist({ type: "enter", side: "short", order });
   }
 
-  async closePosition(reason: string, meta?: Record<string, unknown>): Promise<void> {
+  async closePosition(symbol: string, reason: string, meta?: Record<string, unknown>): Promise<void> {
     this.persist({ type: "close", reason, meta, timestamp: Date.now() });
   }
 
