@@ -115,7 +115,6 @@ export type Credentials = {
   rpcUrl: string;
   wsUrl: string;
   apiKey: string;
-  apiSecret: string;
   privateKey: string;
   pairSymbol: string;
 };

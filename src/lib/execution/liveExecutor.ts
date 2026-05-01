@@ -1,71 +1,56 @@
-import crypto from "crypto";
+import { AsterDEX } from "asterdex-sdk";
+import { ethers } from "ethers";
 import type { Credentials, ExecutionAdapter, TradeInstruction } from "../types";
 
-type AsterOrderResponse = {
-  orderId: number;
-  symbol: string;
-  status: string;
-  clientOrderId: string;
-  price: string;
-  avgPrice: string;
-  origQty: string;
-  executedQty: string;
-  cumQuote: string;
-  timeInForce: string;
-  type: string;
-  reduceOnly: boolean;
-  closePosition: boolean;
-  side: string;
-  positionSide: string;
-  stopPrice: string;
-  workingType: string;
-  priceProtect: boolean;
-  origType: string;
-  time: number;
-  updateTime: number;
-};
-
-type AsterErrorResponse = {
-  code: number;
-  msg: string;
-};
-
 export class LiveExecutor implements ExecutionAdapter {
-  private readonly baseUrl: string;
-  private readonly apiKey: string;
-  private readonly apiSecret: string;
   private readonly symbol: string;
+  private readonly futuresClient: ReturnType<AsterDEX["createFuturesClient"]>;
 
   constructor(credentials: Credentials) {
-    this.baseUrl = credentials.rpcUrl;
-    this.apiKey = credentials.apiKey;
-    this.apiSecret = credentials.apiSecret;
-    // Normalize symbol: remove -PERP suffix and convert to uppercase for REST API
     this.symbol = this.normalizeSymbol(credentials.pairSymbol);
+
+    const isTestnet = credentials.rpcUrl.includes("test") || credentials.wsUrl.includes("test");
+    const sdk = new AsterDEX({
+      baseUrl: {
+        spot: credentials.rpcUrl.replace("fapi", "api"),
+        futures: credentials.rpcUrl,
+        websocket: credentials.wsUrl,
+      },
+    });
+
+    const wallet = new ethers.Wallet(credentials.privateKey);
+    const signerAddress = wallet.address;
+    
+    // User address is API_KEY if it's an address, else assume same as signer
+    const userAddress =
+      credentials.apiKey && credentials.apiKey.startsWith("0x") && credentials.apiKey.length === 42
+        ? credentials.apiKey
+        : signerAddress;
+
+    this.futuresClient = sdk.createFuturesClient(userAddress, signerAddress, credentials.privateKey);
   }
 
   private normalizeSymbol(symbol: string): string {
-    // AsterDEX REST API expects ASTERUSDT (not ASTERUSDT-PERP)
     return symbol.toUpperCase().replace(/-PERP$/, "");
   }
 
   async enterLong(order: TradeInstruction): Promise<void> {
     await this.setLeverage(order.leverage);
-    // Try without positionSide first (one-way mode), fallback to hedge mode if needed
     try {
-      await this.placeOrder({
+      await this.futuresClient.newOrder({
+        symbol: this.symbol,
         side: "BUY",
         type: "MARKET",
-        quantity: order.size,
+        quantity: order.size.toString(),
       });
     } catch (error) {
-      // If one-way mode fails, try with positionSide (hedge mode)
       const err = error instanceof Error ? error.message : String(error);
       if (err.includes("position side")) {
-        await this.placeOrder({
+        await this.futuresClient.newOrder({
+          symbol: this.symbol,
           side: "BUY",
           type: "MARKET",
-          quantity: order.size,
+          quantity: order.size.toString(),
           positionSide: "LONG",
         });
       } else {
@@ -77,21 +62,21 @@ export class LiveExecutor implements ExecutionAdapter {
 
   async enterShort(order: TradeInstruction): Promise<void> {
     await this.setLeverage(order.leverage);
-    // Try without positionSide first (one-way mode), fallback to hedge mode if needed
     try {
-      await this.placeOrder({
+      await this.futuresClient.newOrder({
+        symbol: this.symbol,
         side: "SELL",
         type: "MARKET",
-        quantity: order.size,
+        quantity: order.size.toString(),
       });
     } catch (error) {
-      // If one-way mode fails, try with positionSide (hedge mode)
       const err = error instanceof Error ? error.message : String(error);
       if (err.includes("position side")) {
-        await this.placeOrder({
+        await this.futuresClient.newOrder({
+          symbol: this.symbol,
           side: "SELL",
           type: "MARKET",
-          quantity: order.size,
+          quantity: order.size.toString(),
           positionSide: "SHORT",
         });
       } else {
@@ -115,30 +100,29 @@ export class LiveExecutor implements ExecutionAdapter {
         return;
       }
 
-      // Determine side: positive = long (need to sell), negative = short (need to buy)
       const side = positionAmt > 0 ? "SELL" : "BUY";
-      const quantity = Math.abs(positionAmt);
+      const quantity = Math.abs(positionAmt).toString();
 
-      // Try without positionSide first (one-way mode), fallback to hedge mode if needed
       try {
-        await this.placeOrder({
+        await this.futuresClient.newOrder({
+          symbol: this.symbol,
           side,
           type: "MARKET",
           quantity,
-          reduceOnly: true,
-        });
+          reduceOnly: "true",
+        } as any);
       } catch (error) {
-        // If one-way mode fails, try with positionSide (hedge mode)
         const err = error instanceof Error ? error.message : String(error);
         if (err.includes("position side")) {
           const positionSide = positionAmt > 0 ? "LONG" : "SHORT";
-          await this.placeOrder({
+          await this.futuresClient.newOrder({
+            symbol: this.symbol,
             side,
             type: "MARKET",
             quantity,
             positionSide,
-            reduceOnly: true,
-          });
+            reduceOnly: "true",
+          } as any);
         } else {
           throw error;
         }
@@ -152,70 +136,33 @@ export class LiveExecutor implements ExecutionAdapter {
   }
 
   private async setLeverage(leverage: number): Promise<void> {
-    const params = new URLSearchParams({
+    await this.futuresClient.changeLeverage({
       symbol: this.symbol,
-      leverage: leverage.toString(),
+      leverage,
     });
-
-    await this.signedRequest("POST", "/fapi/v1/leverage", params);
-  }
-
-  private async placeOrder(params: {
-    side: "BUY" | "SELL";
-    type: string;
-    quantity: number;
-    positionSide?: string;
-    reduceOnly?: boolean;
-    price?: number;
-  }): Promise<AsterOrderResponse> {
-    const orderParams = new URLSearchParams({
-      symbol: this.symbol,
-      side: params.side,
-      type: params.type,
-      quantity: params.quantity.toString(),
-    });
-
-    if (params.positionSide) {
-      orderParams.append("positionSide", params.positionSide);
-    }
-    if (params.reduceOnly) {
-      orderParams.append("reduceOnly", "true");
-    }
-    if (params.price) {
-      orderParams.append("price", params.price.toString());
-    }
-
-    const response = await this.signedRequest<AsterOrderResponse>("POST", "/fapi/v1/order", orderParams);
-    return response;
   }
 
   private async getCurrentPosition(): Promise<{ positionAmt: string; symbol: string; entryPrice?: string } | null> {
     try {
-      // Use /fapi/v2/account endpoint like reference code (more reliable)
-      const account = await this.signedRequest<{ positions: Array<{ positionAmt: string; symbol: string; entryPrice?: string }> }>(
-        "GET",
-        "/fapi/v2/account",
-        new URLSearchParams(),
-      );
-      const position = account.positions?.find((p) => p.symbol === this.symbol);
+      const account = await this.futuresClient.getAccount();
+      const position = account.positions?.find((p: any) => p.symbol === this.symbol);
       if (position && position.positionAmt !== "0") {
-        return position;
+        return {
+          positionAmt: position.positionAmt.toString(),
+          symbol: position.symbol,
+          entryPrice: position.entryPrice?.toString()
+        };
       }
       return null;
     } catch {
-      // Fallback to positionRisk endpoint
       try {
-        const params = new URLSearchParams({
-          symbol: this.symbol,
-        });
-        const positions = await this.signedRequest<Array<{ positionAmt: string; symbol: string }>>(
-          "GET",
-          "/fapi/v2/positionRisk",
-          params,
-        );
-        const position = positions.find((p) => p.symbol === this.symbol);
+        const positions = await this.futuresClient.getPositionRisk(this.symbol);
+        const position = positions.find((p: any) => p.symbol === this.symbol);
         if (position && position.positionAmt !== "0") {
-          return position;
+          return {
+            positionAmt: position.positionAmt.toString(),
+            symbol: position.symbol,
+          };
         }
       } catch (fallbackError) {
         console.error("[LiveExecutor] Failed to get position", fallbackError);
@@ -223,63 +170,4 @@ export class LiveExecutor implements ExecutionAdapter {
       return null;
     }
   }
-
-  private async signedRequest<T>(
-    method: "GET" | "POST" | "PUT" | "DELETE",
-    endpoint: string,
-    params: URLSearchParams,
-  ): Promise<T> {
-    const timestamp = Date.now();
-    params.append("timestamp", timestamp.toString());
-
-    const queryString = params.toString();
-    const signature = this.generateSignature(queryString);
-
-    const url = `${this.baseUrl}${endpoint}?${queryString}&signature=${signature}`;
-
-    try {
-      const response = await fetch(url, {
-        method,
-        headers: {
-          "X-MBX-APIKEY": this.apiKey,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
-        let errorCode: number | undefined;
-        try {
-          const error: AsterErrorResponse = await response.json();
-          errorCode = error.code;
-          errorMsg = `AsterDEX API error: ${error.code || response.status} - ${error.msg || response.statusText}`;
-        } catch {
-          // If JSON parsing fails, use the response text
-          const text = await response.text();
-          errorMsg = `AsterDEX API error: ${response.status} - ${text || response.statusText}`;
-        }
-        
-        // Check for insufficient balance errors (common error codes: -2019, -2010)
-        if (errorCode === -2019 || errorCode === -2010 || errorMsg.toLowerCase().includes("balance") || errorMsg.toLowerCase().includes("insufficient")) {
-          console.warn(`[LiveExecutor] Insufficient balance: ${errorMsg}`);
-          throw new Error(`Insufficient balance: ${errorMsg}`);
-        }
-        
-        console.error(`[LiveExecutor] API request failed: ${method} ${endpoint}`, { url, errorMsg });
-        throw new Error(errorMsg);
-      }
-
-      return response.json();
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error(`Network error: ${String(error)}`);
-    }
-  }
-
-  private generateSignature(queryString: string): string {
-    return crypto.createHmac("sha256", this.apiSecret).update(queryString).digest("hex");
-  }
 }
-

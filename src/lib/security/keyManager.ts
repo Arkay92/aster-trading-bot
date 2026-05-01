@@ -15,16 +15,12 @@ export class KeyManager {
 
   static redactCredentials(credentials: {
     apiKey?: string;
-    apiSecret?: string;
     privateKey?: string;
     [key: string]: unknown;
   }): Record<string, unknown> {
     const redacted = { ...credentials };
     if (redacted.apiKey) {
       redacted.apiKey = this.redactKey(redacted.apiKey as string);
-    }
-    if (redacted.apiSecret) {
-      redacted.apiSecret = this.redactKey(redacted.apiSecret as string);
     }
     if (redacted.privateKey) {
       redacted.privateKey = this.REDACTED;
