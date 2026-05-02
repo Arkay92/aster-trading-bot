@@ -4,11 +4,11 @@
   "private": true,
   "scripts": {
     "bot": "tsx src/bot/index.ts",
-    "test:bot": "tsx scripts/test-bot.ts",
-    "test:step": "tsx scripts/test-step-by-step.ts",
-    "test:live:btc": "tsx scripts/test-live-btc.ts",
-    "test:live:btc:v3": "tsx scripts/test-live-btc-v3-manual.ts",
-    "register:api-key": "tsx scripts/register-aster-api-key.ts"
+    "test:bot": "tsx scripts/test/test-bot.ts",
+    "test:step": "tsx scripts/test/test-step-by-step.ts",
+    "test:live:btc": "tsx scripts/test/test-live-btc.ts",
+    "test:live:btc:v3": "tsx scripts/test/test-live-btc-v3-manual.ts",
+    "register:api-key": "tsx scripts/util/register-aster-api-key.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

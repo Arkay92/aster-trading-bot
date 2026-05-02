@@ -1,8 +1,8 @@
 import dotenv from "dotenv";
 import { resolve } from "path";
-import { LiveExecutor } from "../src/lib/execution/liveExecutor";
-import { loadConfig } from "../src/lib/config";
-import type { TradeInstruction } from "../src/lib/types";
+import { LiveExecutor } from "../../src/lib/execution/liveExecutor";
+import { loadConfig } from "../../src/lib/config";
+import type { TradeInstruction } from "../../src/lib/types";
 
 dotenv.config({ path: resolve(process.cwd(), ".env.local") });
 dotenv.config({ path: resolve(process.cwd(), ".env") });

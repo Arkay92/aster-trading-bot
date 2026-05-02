@@ -3,16 +3,16 @@
  * Tests each component individually with detailed output
  */
 
-import { EMA } from "../src/lib/indicators/ema";
-import { RSI } from "../src/lib/indicators/rsi";
-import { VirtualBarBuilder } from "../src/lib/virtualBarBuilder";
-import { WatermellonEngine } from "../src/lib/watermellonEngine";
-import { PeachHybridEngine } from "../src/lib/peachHybridEngine";
-import { DryRunExecutor } from "../src/lib/execution/dryRunExecutor";
-import { PositionStateManager } from "../src/lib/state/positionState";
-import { StatePersistence } from "../src/lib/state/statePersistence";
-import { OrderTracker } from "../src/lib/execution/orderTracker";
-import type { Tick, SyntheticBar, WatermellonConfig, PeachConfig } from "../src/lib/types";
+import { EMA } from "../../src/lib/indicators/ema";
+import { RSI } from "../../src/lib/indicators/rsi";
+import { VirtualBarBuilder } from "../../src/lib/virtualBarBuilder";
+import { WatermellonEngine } from "../../src/lib/watermellonEngine";
+import { PeachHybridEngine } from "../../src/lib/peachHybridEngine";
+import { DryRunExecutor } from "../../src/lib/execution/dryRunExecutor";
+import { PositionStateManager } from "../../src/lib/state/positionState";
+import { StatePersistence } from "../../src/lib/state/statePersistence";
+import { OrderTracker } from "../../src/lib/execution/orderTracker";
+import type { Tick, SyntheticBar, WatermellonConfig, PeachConfig } from "../../src/lib/types";
 
 console.log("=".repeat(80));
 console.log("STEP-BY-STEP BOT TESTING");
@@ -163,13 +163,13 @@ console.log("\n[4.1] Testing bar creation from ticks...");
 const builder = new VirtualBarBuilder(30000); // 30 second bars
 const baseTime = Date.now();
 const ticks: Tick[] = [
-  { timestamp: baseTime, price: 100.0, size: 1.0 },
-  { timestamp: baseTime + 5000, price: 100.5, size: 2.0 },
-  { timestamp: baseTime + 10000, price: 101.0, size: 1.5 },
-  { timestamp: baseTime + 15000, price: 100.8, size: 2.5 },
-  { timestamp: baseTime + 20000, price: 101.2, size: 1.0 },
-  { timestamp: baseTime + 25000, price: 101.5, size: 2.0 },
-  { timestamp: baseTime + 30000, price: 102.0, size: 1.5 }, // Should close bar
+  { symbol: "TEST", timestamp: baseTime, price: 100.0, size: 1.0 },
+  { symbol: "TEST", timestamp: baseTime + 5000, price: 100.5, size: 2.0 },
+  { symbol: "TEST", timestamp: baseTime + 10000, price: 101.0, size: 1.5 },
+  { symbol: "TEST", timestamp: baseTime + 15000, price: 100.8, size: 2.5 },
+  { symbol: "TEST", timestamp: baseTime + 20000, price: 101.2, size: 1.0 },
+  { symbol: "TEST", timestamp: baseTime + 25000, price: 101.5, size: 2.0 },
+  { symbol: "TEST", timestamp: baseTime + 30000, price: 102.0, size: 1.5 }, // Should close bar
 ];
 
 let barCount = 0;
@@ -194,6 +194,7 @@ const builder2 = new VirtualBarBuilder(10000); // 10 second bars
 const manyTicks: Tick[] = [];
 for (let i = 0; i < 20; i++) {
   manyTicks.push({
+    symbol: "TEST",
     timestamp: baseTime + i * 1000,
     price: 100 + Math.random() * 2,
     size: Math.random() * 2,
@@ -375,30 +376,46 @@ console.log("=".repeat(80));
 console.log("\n[7.1] Testing PositionStateManager...");
 const stateManager = new PositionStateManager();
 
-console.log("  Initial state:", stateManager.getState());
+console.log("  Initial state:", stateManager.getState("local"));
 
-stateManager.updateLocalState({
+stateManager.updateLocalState("local", {
   side: "long",
   size: 1000,
   avgEntry: 100.5,
   unrealizedPnl: 10.5,
 });
 
-console.log("  After local update:", stateManager.getState());
+console.log("  After local update:", stateManager.getState("local"));
 
-const reconciled = stateManager.updateFromRest({
+const reconciled = stateManager.updateFromRest("local", {
   positionAmt: "1000",
   entryPrice: "100.5",
   unrealizedProfit: "10.5",
 });
 
 console.log(`  Reconciliation result: ${reconciled ? "Success" : "Failed"}`);
-console.log("  Final state:", stateManager.getState());
+console.log("  Final state:", stateManager.getState("local"));
 
 console.log("\n[7.2] Testing StatePersistence...");
-const statePersistence = new StatePersistence("./test-data");
+const statePersistence = new StatePersistence("./data/test");
 
 const testState = {
+  positions: new Map([
+    [
+      "TEST",
+      {
+        side: "long" as const,
+        size: 1000,
+        avgEntry: 100.5,
+        unrealizedPnl: 10.5,
+        lastUpdate: Date.now(),
+      },
+    ],
+  ]),
+  /*
+   * Persistence now expects a map of positions keyed by symbol.
+   */
+  /*
   position: {
     side: "long" as const,
     size: 1000,
@@ -406,6 +423,7 @@ const testState = {
     unrealizedPnl: 10.5,
     lastUpdate: Date.now(),
   },
+  */
   lastBarCloseTime: Date.now(),
 };
 
@@ -426,6 +444,7 @@ console.log("\n[7.3] Testing OrderTracker...");
 const orderTracker = new OrderTracker();
 
 const testOrder = {
+  symbol: "TESTUSDT-PERP",
   side: "long" as const,
   size: 1000,
   leverage: 5,
@@ -454,6 +473,7 @@ console.log(`  Pending orders: ${orderTracker.hasPendingOrders()}`);
   const executor = new DryRunExecutor();
 
   const longOrder = {
+    symbol: "TESTUSDT-PERP",
     side: "long" as const,
     size: 1000,
     leverage: 5,
@@ -463,6 +483,7 @@ console.log(`  Pending orders: ${orderTracker.hasPendingOrders()}`);
   };
 
   const shortOrder = {
+    symbol: "TESTUSDT-PERP",
     side: "short" as const,
     size: 500,
     leverage: 3,
@@ -477,7 +498,7 @@ console.log(`  Pending orders: ${orderTracker.hasPendingOrders()}`);
   await executor.enterShort(shortOrder);
   console.log("  Short order executed (dry-run)");
 
-  await executor.closePosition("test-close");
+  await executor.closePosition("TESTUSDT-PERP", "test-close");
   console.log("  Position closed (dry-run)");
 
   const logs = executor.logs;
