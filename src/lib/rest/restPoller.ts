@@ -103,46 +103,27 @@ export class RestPoller {
   private async fetchPosition(): Promise<void> {
     try {
       const account = await SignedRequestLock.run(async () => this.v3.getAccount());
-      // Find any open position in our symbols
-      let pos = account.positions?.find((p: PositionLike) => this.symbols.includes(p.symbol) && p.positionAmt !== "0");
-      // If none open, default to the first symbol to report flat
-      if (!pos && this.symbols.length > 0) {
-        pos = account.positions?.find((p: PositionLike) => p.symbol === this.symbols[0]);
-      }
-      
-      if (pos) {
-        this.onPositionUpdate?.(pos as AsterPositionResponse);
-      } else {
-        this.onPositionUpdate?.({
-          positionAmt: "0",
-          entryPrice: "0",
-          markPrice: "0",
-          unRealizedProfit: "0",
-          liquidationPrice: "0",
-          leverage: "1",
-          marginType: "cross",
-          isolatedMargin: "0",
-          positionSide: "BOTH",
-          symbol: this.symbols[0] || "UNKNOWN",
-        });
+      const positions = account.positions || [];
+      const bySymbol = new Map<string, PositionLike>();
+      for (const p of positions) {
+        bySymbol.set(p.symbol, p);
       }
 
-      const now = Date.now();
-      if (!this.lastSuccessLog || now - this.lastSuccessLog > 60000) {
-        console.log(`[RestPoller] Position poll successful (symbol: ${pos?.symbol || this.symbols[0]}, position: ${pos?.positionAmt || "0"})`);
-        this.lastSuccessLog = now;
-      }
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      console.warn(`[RestPoller] Account endpoint failed, trying fallback: ${err.message}`);
-      try {
-        const position = await SignedRequestLock.run(async () => this.v3.getPositionRisk(this.symbols[0]));
-        let pos = position.find((p: PositionLike) => this.symbols.includes(p.symbol) && p.positionAmt !== "0");
-        if (!pos && this.symbols.length > 0) {
-          pos = position.find((p: PositionLike) => p.symbol === this.symbols[0]);
-        }
+      for (const symbol of this.symbols) {
+        const pos = bySymbol.get(symbol);
         if (pos) {
-          this.onPositionUpdate?.(pos as AsterPositionResponse);
+          this.onPositionUpdate?.({
+            positionAmt: pos.positionAmt || "0",
+            entryPrice: pos.entryPrice || "0",
+            markPrice: pos.markPrice || "0",
+            unRealizedProfit: pos.unRealizedProfit || "0",
+            liquidationPrice: pos.liquidationPrice || "0",
+            leverage: pos.leverage || "1",
+            marginType: pos.marginType || "cross",
+            isolatedMargin: pos.isolatedMargin || "0",
+            positionSide: pos.positionSide || "BOTH",
+            symbol,
+          });
         } else {
           this.onPositionUpdate?.({
             positionAmt: "0",
@@ -154,7 +135,54 @@ export class RestPoller {
             marginType: "cross",
             isolatedMargin: "0",
             positionSide: "BOTH",
-            symbol: this.symbols[0] || "UNKNOWN",
+            symbol,
+          });
+        }
+      }
+
+      const now = Date.now();
+      if (!this.lastSuccessLog || now - this.lastSuccessLog > 60000) {
+        const first = this.symbols[0];
+        const sample = bySymbol.get(first);
+        console.log(`[RestPoller] Position poll successful (symbol: ${first}, position: ${sample?.positionAmt || "0"})`);
+        this.lastSuccessLog = now;
+      }
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      console.warn(`[RestPoller] Account endpoint failed, trying fallback: ${err.message}`);
+      try {
+        for (const symbol of this.symbols) {
+          const positions = await SignedRequestLock.run(async () => this.v3.getPositionRisk(symbol));
+          const pos = positions.find((p: PositionLike) => p.symbol === symbol);
+          if (pos) {
+            this.onPositionUpdate?.(pos as AsterPositionResponse);
+          } else {
+            this.onPositionUpdate?.({
+              positionAmt: "0",
+              entryPrice: "0",
+              markPrice: "0",
+              unRealizedProfit: "0",
+              liquidationPrice: "0",
+              leverage: "1",
+              marginType: "cross",
+              isolatedMargin: "0",
+              positionSide: "BOTH",
+              symbol,
+            });
+          }
+        }
+        if (this.symbols.length === 0) {
+          this.onPositionUpdate?.({
+            positionAmt: "0",
+            entryPrice: "0",
+            markPrice: "0",
+            unRealizedProfit: "0",
+            liquidationPrice: "0",
+            leverage: "1",
+            marginType: "cross",
+            isolatedMargin: "0",
+            positionSide: "BOTH",
+            symbol: "UNKNOWN",
           });
         }
       } catch (fallbackError) {

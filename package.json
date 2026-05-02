@@ -3,10 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint",
     "bot": "tsx src/bot/index.ts",
     "test:bot": "tsx scripts/test-bot.ts",
     "test:step": "tsx scripts/test-step-by-step.ts",
@@ -15,22 +11,14 @@
     "register:api-key": "tsx scripts/register-aster-api-key.ts"
   },
   "dependencies": {
-    "asterdex-sdk": "^1.0.0",
     "dotenv": "^16.4.7",
     "ethers": "^6.16.0",
-    "next": "16.0.3",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
     "ws": "^8.18.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
     "@types/ws": "^8.5.12",
-    "eslint": "^9",
-    "eslint-config-next": "16.0.3",
     "tsx": "^4.19.2",
     "typescript": "^5"
   }

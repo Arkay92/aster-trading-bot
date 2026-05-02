@@ -10,10 +10,19 @@ import { DryRunExecutor } from "@/lib/execution/dryRunExecutor";
 import { LiveExecutor } from "@/lib/execution/liveExecutor";
 import { PaperExecutor } from "@/lib/execution/paperExecutor";
 import { initFileLogging } from "@/lib/logging/fileLogger";
+import { BotLock } from "@/lib/runtime/botLock";
 import { AsterTickStream } from "@/lib/tickStream";
+
+const botLock = new BotLock("log/bot.lock");
 
 async function main() {
   initFileLogging("log", "bot.log");
+  const lock = botLock.acquire();
+  if (!lock.ok) {
+    console.error(lock.reason);
+    process.exit(1);
+  }
+
   const config = loadConfig();
   
   // Safety warning for live mode
@@ -74,6 +83,7 @@ async function main() {
   const shutdown = async () => {
     console.log("Received shutdown signal, closing bot...");
     await bot.stop();
+    botLock.release();
     process.exit(0);
   };
 
@@ -83,6 +93,7 @@ async function main() {
 
 main().catch((error) => {
   console.error("Bot failed to start", error);
+  botLock.release();
   process.exit(1);
 });
 

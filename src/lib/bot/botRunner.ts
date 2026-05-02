@@ -310,42 +310,43 @@ export class BotRunner {
   private usdtBalance: number = 0;
   private lastBalanceLog: number = 0;
 
+  private syncPositionFromState(symbol: string): void {
+    const state = this.stateManager.getState(symbol);
+    const pos: PositionState = {
+      side: state.side,
+      size: state.size,
+      symbol,
+      entryPrice: state.avgEntry > 0 ? state.avgEntry : undefined,
+      openedAt: state.lastUpdate,
+    };
+    this.positions.set(symbol, pos);
+  }
+
   private startRestPolling(): void {
     this.restPoller.on("position", (position) => {
       const symbol = position.symbol;
       if (!symbol) return;
 
-      const reconciled = this.stateManager.updateFromRest(symbol, {
-        positionAmt: position.positionAmt,
-        entryPrice: position.entryPrice || "0",
-        unrealizedProfit: position.unRealizedProfit || "0",
+      // API is source-of-truth in live mode: sync directly from REST position snapshot.
+      const size = parseFloat(position.positionAmt);
+      const side: "long" | "short" | "flat" = size > 0 ? "long" : size < 0 ? "short" : "flat";
+      const absSize = Math.abs(size);
+      const avgEntry = parseFloat(position.entryPrice || "0") || 0;
+      const unrealized = parseFloat(position.unRealizedProfit || "0") || 0;
+
+      this.stateManager.updateLocalState(symbol, {
+        side,
+        size: absSize,
+        symbol,
+        avgEntry,
+        unrealizedPnl: unrealized,
       });
+      this.syncPositionFromState(symbol);
 
-      if (!reconciled) {
-        this.log(`State reconciliation failed for ${symbol}`, {
-          shouldFreeze: this.stateManager.shouldFreezeTrading(symbol),
-        });
-        if (this.stateManager.shouldFreezeTrading(symbol)) {
-          this.freezeTrading(60_000, symbol);
-        }
+      if (side !== "flat") {
+        this.orderTracker.confirmByPositionChange(side, absSize);
       } else {
-        const size = parseFloat(position.positionAmt);
-        if (size !== 0) {
-          const side = size > 0 ? "long" : "short";
-          this.orderTracker.confirmByPositionChange(side, Math.abs(size));
-        } else {
-          this.stateManager.clearPendingOrder(symbol);
-        }
-
-        const state = this.stateManager.getState(symbol);
-        const pos: PositionState = {
-          side: state.side,
-          size: state.size,
-          symbol,
-          entryPrice: state.avgEntry > 0 ? state.avgEntry : undefined,
-          openedAt: state.lastUpdate,
-        };
-        this.positions.set(symbol, pos);
+        this.stateManager.clearPendingOrder(symbol);
       }
     });
 
