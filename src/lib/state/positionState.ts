@@ -14,26 +14,36 @@ export type LocalPositionState = {
 };
 
 export class PositionStateManager {
-  private state: LocalPositionState = {
-    size: 0,
-    side: "flat",
-    avgEntry: 0,
-    unrealizedPnl: 0,
-    lastUpdate: Date.now(),
-  };
-
-  private reconciliationFailures = 0;
+  private states = new Map<string, LocalPositionState>();
+  private reconciliationFailures = new Map<string, number>();
   private readonly maxReconciliationFailures = 2;
 
-  updateLocalState(update: Partial<LocalPositionState>): void {
-    this.state = {
-      ...this.state,
-      ...update,
-      lastUpdate: Date.now(),
-    };
+  private getOrCreateState(symbol: string): LocalPositionState {
+    let state = this.states.get(symbol);
+    if (!state) {
+      state = {
+        size: 0,
+        side: "flat",
+        symbol,
+        avgEntry: 0,
+        unrealizedPnl: 0,
+        lastUpdate: Date.now(),
+      };
+      this.states.set(symbol, state);
+    }
+    return state;
   }
 
-  updateFromRest(restState: {
+  updateLocalState(symbol: string, update: Partial<LocalPositionState>): void {
+    const currentState = this.getOrCreateState(symbol);
+    this.states.set(symbol, {
+      ...currentState,
+      ...update,
+      lastUpdate: Date.now(),
+    });
+  }
+
+  updateFromRest(symbol: string, restState: {
     positionAmt: string;
     entryPrice: string;
     unrealizedProfit: string;
@@ -50,52 +60,41 @@ export class PositionStateManager {
       unrealizedPnl,
     };
 
+    const currentState = this.getOrCreateState(symbol);
     const localStateNormalized = {
-      size: this.state.size,
-      side: this.state.side,
-      avgEntry: this.state.avgEntry,
-      unrealizedPnl: this.state.unrealizedPnl,
+      size: currentState.size,
+      side: currentState.side,
+      avgEntry: currentState.avgEntry,
+      unrealizedPnl: currentState.unrealizedPnl,
     };
 
     const reconciled = this.reconcile(restStateNormalized, localStateNormalized);
 
     if (reconciled) {
-      this.reconciliationFailures = 0;
-      this.state = {
-        ...this.state,
+      this.reconciliationFailures.set(symbol, 0);
+      this.states.set(symbol, {
+        ...currentState,
         ...restStateNormalized,
         lastUpdate: Date.now(),
-      };
+      });
       return true;
     }
 
-    // If REST says flat but local has a position, trust REST (position was closed externally)
-    // This handles stale state from previous runs
-    if (restStateNormalized.side === "flat" && localStateNormalized.side !== "flat") {
-      console.log(`[PositionState] REST shows flat position, clearing local state (was ${localStateNormalized.side} ${localStateNormalized.size})`);
-      this.reconciliationFailures = 0;
-      this.state = {
-        ...this.state,
+    // Trust REST if local is flat but REST has a position, or vice versa
+    if ((restStateNormalized.side === "flat" && localStateNormalized.side !== "flat") ||
+        (restStateNormalized.side !== "flat" && localStateNormalized.side === "flat")) {
+      console.log(`[PositionState] ${symbol} REST/Local mismatch (${restStateNormalized.side} vs ${localStateNormalized.side}), trusting REST`);
+      this.reconciliationFailures.set(symbol, 0);
+      this.states.set(symbol, {
+        ...currentState,
         ...restStateNormalized,
         lastUpdate: Date.now(),
-      };
+      });
       return true;
     }
 
-    // If REST has a position but local is flat, trust REST (position exists on exchange)
-    // This handles cases where bot restarted or position was opened externally
-    if (restStateNormalized.side !== "flat" && localStateNormalized.side === "flat") {
-      console.log(`[PositionState] REST shows ${restStateNormalized.side} position (${restStateNormalized.size}), updating local state from flat`);
-      this.reconciliationFailures = 0;
-      this.state = {
-        ...this.state,
-        ...restStateNormalized,
-        lastUpdate: Date.now(),
-      };
-      return true;
-    }
-
-    this.reconciliationFailures++;
+    const failures = (this.reconciliationFailures.get(symbol) || 0) + 1;
+    this.reconciliationFailures.set(symbol, failures);
     return false;
   }
 
@@ -106,35 +105,50 @@ export class PositionStateManager {
     const sizeMatch = Math.abs(rest.size - local.size) < 0.0001;
     const sideMatch = rest.side === local.side;
     
-    // If both are flat, entry price doesn't matter (should be 0 anyway)
     if (rest.side === "flat" && local.side === "flat") {
-      return sizeMatch && sideMatch; // Only check size and side when both flat
+      return sizeMatch && sideMatch;
     }
     
-    // For non-flat positions, check entry price match
     const entryMatch = rest.avgEntry === 0 || Math.abs(rest.avgEntry - local.avgEntry) / rest.avgEntry < 0.01;
 
     return sizeMatch && sideMatch && entryMatch;
   }
 
-  shouldFreezeTrading(): boolean {
-    return this.reconciliationFailures >= this.maxReconciliationFailures;
+  shouldFreezeTrading(symbol: string): boolean {
+    return (this.reconciliationFailures.get(symbol) || 0) >= this.maxReconciliationFailures;
   }
 
-  resetReconciliationFailures(): void {
-    this.reconciliationFailures = 0;
+  resetReconciliationFailures(symbol: string): void {
+    this.reconciliationFailures.set(symbol, 0);
   }
 
-  getState(): LocalPositionState {
-    return { ...this.state };
+  getState(symbol: string): LocalPositionState {
+    return this.getOrCreateState(symbol);
   }
 
-  clearPendingOrder(): void {
-    this.state.pendingOrder = undefined;
+  getAllStates(): Map<string, LocalPositionState> {
+    return new Map(this.states);
   }
 
-  setPendingOrder(order: { side: "long" | "short"; size: number; timestamp: number }): void {
-    this.state.pendingOrder = order;
+  getActivePositionCount(): number {
+    let count = 0;
+    for (const state of this.states.values()) {
+      if (state.side !== "flat" && state.size > 0) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  clearPendingOrder(symbol: string): void {
+    const state = this.states.get(symbol);
+    if (state) {
+      state.pendingOrder = undefined;
+    }
+  }
+
+  setPendingOrder(symbol: string, order: { side: "long" | "short"; size: number; timestamp: number }): void {
+    const state = this.getOrCreateState(symbol);
+    state.pendingOrder = order;
   }
 }
-

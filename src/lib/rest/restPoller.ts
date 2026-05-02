@@ -1,6 +1,6 @@
 import type { Credentials } from "../types";
-import { AsterDEX } from "asterdex-sdk";
-import { ethers } from "ethers";
+import { SignedRequestLock } from "../execution/signedRequestLock";
+import { AsterV3Client } from "../execution/asterV3Client";
 
 type AsterPositionResponse = {
   positionAmt: string;
@@ -22,6 +22,19 @@ type AsterBalanceResponse = {
   maxWithdrawAmount: string;
 };
 
+type PositionLike = {
+  symbol: string;
+  positionAmt: string;
+  entryPrice?: string;
+  markPrice?: string;
+  unRealizedProfit?: string;
+  liquidationPrice?: string;
+  leverage?: string;
+  marginType?: string;
+  isolatedMargin?: string;
+  positionSide?: string;
+};
+
 export class RestPoller {
   private readonly symbols: string[];
   private intervalId: NodeJS.Timeout | null = null;
@@ -29,30 +42,11 @@ export class RestPoller {
   private onBalanceUpdate?: (balance: AsterBalanceResponse[]) => void;
   private onError?: (error: Error) => void;
   private lastSuccessLog: number = 0;
-  private readonly futuresClient: ReturnType<AsterDEX["createFuturesClient"]>;
+  private readonly v3: AsterV3Client;
 
   constructor(credentials: Credentials) {
     this.symbols = credentials.pairSymbols.map((s) => this.normalizeSymbol(s));
-
-    const isTestnet = credentials.rpcUrl.includes("test") || credentials.wsUrl.includes("test");
-    const sdk = new AsterDEX({
-      baseUrl: {
-        spot: credentials.rpcUrl.replace("fapi", "api"),
-        futures: credentials.rpcUrl,
-        websocket: credentials.wsUrl,
-      },
-    });
-
-    const wallet = new ethers.Wallet(credentials.privateKey);
-    const signerAddress = wallet.address;
-    
-    // User address is API_KEY if it's an address, else assume same as signer
-    const userAddress =
-      credentials.apiKey && credentials.apiKey.startsWith("0x") && credentials.apiKey.length === 42
-        ? credentials.apiKey
-        : signerAddress;
-
-    this.futuresClient = sdk.createFuturesClient(userAddress, signerAddress, credentials.privateKey);
+    this.v3 = new AsterV3Client(credentials);
   }
 
   private normalizeSymbol(symbol: string): string {
@@ -108,16 +102,16 @@ export class RestPoller {
 
   private async fetchPosition(): Promise<void> {
     try {
-      const account = await this.futuresClient.getAccount();
+      const account = await SignedRequestLock.run(async () => this.v3.getAccount());
       // Find any open position in our symbols
-      let pos = account.positions?.find((p: any) => this.symbols.includes(p.symbol) && p.positionAmt !== "0");
+      let pos = account.positions?.find((p: PositionLike) => this.symbols.includes(p.symbol) && p.positionAmt !== "0");
       // If none open, default to the first symbol to report flat
       if (!pos && this.symbols.length > 0) {
-        pos = account.positions?.find((p: any) => p.symbol === this.symbols[0]);
+        pos = account.positions?.find((p: PositionLike) => p.symbol === this.symbols[0]);
       }
       
       if (pos) {
-        this.onPositionUpdate?.(pos as any);
+        this.onPositionUpdate?.(pos as AsterPositionResponse);
       } else {
         this.onPositionUpdate?.({
           positionAmt: "0",
@@ -142,13 +136,13 @@ export class RestPoller {
       const err = error instanceof Error ? error : new Error(String(error));
       console.warn(`[RestPoller] Account endpoint failed, trying fallback: ${err.message}`);
       try {
-        const position = await this.futuresClient.getPositionRisk(this.symbols[0]); // Fallback might only work per-symbol, but let's try the first
-        let pos = position.find((p: any) => this.symbols.includes(p.symbol) && p.positionAmt !== "0");
+        const position = await SignedRequestLock.run(async () => this.v3.getPositionRisk(this.symbols[0]));
+        let pos = position.find((p: PositionLike) => this.symbols.includes(p.symbol) && p.positionAmt !== "0");
         if (!pos && this.symbols.length > 0) {
-          pos = position.find((p: any) => p.symbol === this.symbols[0]);
+          pos = position.find((p: PositionLike) => p.symbol === this.symbols[0]);
         }
         if (pos) {
-          this.onPositionUpdate?.(pos as any);
+          this.onPositionUpdate?.(pos as AsterPositionResponse);
         } else {
           this.onPositionUpdate?.({
             positionAmt: "0",
@@ -173,7 +167,7 @@ export class RestPoller {
 
   private async fetchBalance(): Promise<void> {
     try {
-      const balance = await this.futuresClient.getBalance();
+      const balance = await SignedRequestLock.run(async () => this.v3.getBalance());
       
       if (!Array.isArray(balance)) {
         console.error(`[RestPoller] Balance response is not an array:`, typeof balance);
@@ -186,7 +180,7 @@ export class RestPoller {
       }
       
       if (this.onBalanceUpdate) {
-        this.onBalanceUpdate(balance as any);
+        this.onBalanceUpdate(balance as AsterBalanceResponse[]);
       } else {
         console.error(`[RestPoller] onBalanceUpdate handler is not set!`);
       }
@@ -195,7 +189,7 @@ export class RestPoller {
       console.warn(`[RestPoller] Balance endpoint failed: ${err.message}`);
       
       try {
-        const account = await this.futuresClient.getAccount();
+        const account = await SignedRequestLock.run(async () => this.v3.getAccount());
         
         if (account.assets && Array.isArray(account.assets)) {
           type AccountAsset = { asset: string; availableBalance?: string; balance?: string; walletBalance?: string; maxWithdrawAmount?: string };

@@ -1,11 +1,123 @@
 {
-  "position": {
-    "size": 0,
-    "side": "flat",
-    "avgEntry": 0,
-    "unrealizedPnl": 0,
-    "lastUpdate": 1777669683502
+  "positions": {
+    "BTCUSDT-PERP": {
+      "size": 0.0001,
+      "side": "long",
+      "symbol": "BTCUSDT-PERP",
+      "avgEntry": 78430,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777743130486,
+      "pendingOrder": {
+        "side": "long",
+        "size": 0.0001,
+        "timestamp": 1777743128633
+      }
+    },
+    "ETHUSDT-PERP": {
+      "size": 0.0043,
+      "side": "long",
+      "symbol": "ETHUSDT-PERP",
+      "avgEntry": 2306.92,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777743122541,
+      "pendingOrder": {
+        "side": "long",
+        "size": 0.0043,
+        "timestamp": 1777743118403
+      }
+    },
+    "SOLUSDT-PERP": {
+      "size": 0.119,
+      "side": "short",
+      "symbol": "SOLUSDT-PERP",
+      "avgEntry": 84.02,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777743747954,
+      "pendingOrder": {
+        "side": "short",
+        "size": 0.119,
+        "timestamp": 1777743745569
+      }
+    },
+    "HYPEUSDT-PERP": {
+      "size": 0.2403,
+      "side": "short",
+      "symbol": "HYPEUSDT-PERP",
+      "avgEntry": 41.621,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777742029746,
+      "pendingOrder": {
+        "side": "short",
+        "size": 0.2403,
+        "timestamp": 1777742026780
+      }
+    },
+    "BNBUSDT-PERP": {
+      "size": 0.0162,
+      "side": "short",
+      "symbol": "BNBUSDT-PERP",
+      "avgEntry": 618.65,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777744556212,
+      "pendingOrder": {
+        "side": "short",
+        "size": 0.0162,
+        "timestamp": 1777744551006
+      }
+    },
+    "APEUSDT-PERP": {
+      "size": 54.3478,
+      "side": "short",
+      "symbol": "APEUSDT-PERP",
+      "avgEntry": 0.184,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777731361292,
+      "pendingOrder": {
+        "side": "short",
+        "size": 54.3478,
+        "timestamp": 1777731307750
+      }
+    },
+    "XRPUSDT-PERP": {
+      "size": 7.1829,
+      "side": "short",
+      "symbol": "XRPUSDT-PERP",
+      "avgEntry": 1.3922,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777743741741,
+      "pendingOrder": {
+        "side": "short",
+        "size": 7.1829,
+        "timestamp": 1777743736438
+      }
+    },
+    "GENIUSUSDT-PERP": {
+      "size": 18.7056,
+      "side": "long",
+      "symbol": "GENIUSUSDT-PERP",
+      "avgEntry": 0.5346,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777742288233,
+      "pendingOrder": {
+        "side": "long",
+        "size": 18.7056,
+        "timestamp": 1777742284700
+      }
+    },
+    "JASMYUSDT-PERP": {
+      "size": 1755.618,
+      "side": "short",
+      "symbol": "JASMYUSDT-PERP",
+      "avgEntry": 0.005696,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777743798218,
+      "pendingOrder": {
+        "side": "short",
+        "size": 1755.618,
+        "timestamp": 1777740535800
+      }
+    }
   },
-  "lastBarCloseTime": 1777669750495,
-  "timestamp": 1777669749917
+  "lastBarCloseTime": 1777744551006,
+  "timestamp": 1777744556212
 }

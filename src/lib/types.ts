@@ -93,6 +93,34 @@ export type PeachConfig = {
   v2: PeachV2Config;
 };
 
+export type SwingConfig = {
+  timeframeMs: number;
+  emaTrendLen: number;
+  rsiLength: number;
+  rsiDipThreshold: number;
+  rsiHighThreshold: number;
+  lookbackBars: number;
+  dipPercentFromHigh: number;
+  bounceConfirmPercent: number;
+};
+
+export type EmaCrossConfig = {
+  timeframeMs: number;
+  emaFastLen: number;
+  emaSlowLen: number;
+  rsiLength: number;
+  rsiMinLong: number;
+  rsiMaxShort: number;
+};
+
+export type RsiReversionConfig = {
+  timeframeMs: number;
+  rsiLength: number;
+  rsiOversold: number;
+  rsiOverbought: number;
+  emaTrendLen: number;
+};
+
 export type RiskConfig = {
   maxPositionSize: number;
   maxLeverage: number;
@@ -108,7 +136,17 @@ export type RiskConfig = {
   // Market regime filters
   requireTrendingMarket?: boolean; // Only trade when market is trending (ADX > threshold)
   adxThreshold?: number; // ADX threshold for trending market (default: 25)
+  perStrategyMaxPositions?: Partial<Record<StrategyType, number>>;
+  quietSignalLogs?: boolean; // Suppress noisy non-actionable signal logs
+  strategyOwnershipTimeoutBars?: number; // Allow strategy takeover after N bars
 };
+
+export type StrategyType =
+  | "watermellon"
+  | "peach-hybrid"
+  | "swing"
+  | "ema-cross"
+  | "rsi-reversion";
 
 export type Mode = "dry-run" | "live" | "paper";
 
@@ -117,6 +155,9 @@ export type Credentials = {
   wsUrl: string;
   apiKey: string;
   privateKey: string;
+  userAddress?: string;
+  signerAddress?: string;
+  signerPrivateKey?: string;
   pairSymbols: string[];
 };
 
@@ -127,9 +168,13 @@ export type AppConfig = {
     startingBalance: number;
   };
   credentials: Credentials;
-  strategy: WatermellonConfig | PeachConfig;
+  strategy: WatermellonConfig | PeachConfig | SwingConfig | EmaCrossConfig | RsiReversionConfig;
+  strategies?: Partial<
+    Record<StrategyType, WatermellonConfig | PeachConfig | SwingConfig | EmaCrossConfig | RsiReversionConfig>
+  >;
+  strategyTypes?: StrategyType[];
   risk: RiskConfig;
-  strategyType?: "watermellon" | "peach-hybrid";
+  strategyType?: StrategyType;
 };
 
 export type PositionSide = "long" | "short" | "flat";
@@ -140,6 +185,7 @@ export type PositionState = {
   symbol?: string;
   entryPrice?: number;
   openedAt?: number;
+  strategy?: StrategyType;
 };
 
 export type TradeInstruction = {

@@ -9,9 +9,11 @@ import { loadConfig } from "@/lib/config";
 import { DryRunExecutor } from "@/lib/execution/dryRunExecutor";
 import { LiveExecutor } from "@/lib/execution/liveExecutor";
 import { PaperExecutor } from "@/lib/execution/paperExecutor";
+import { initFileLogging } from "@/lib/logging/fileLogger";
 import { AsterTickStream } from "@/lib/tickStream";
 
 async function main() {
+  initFileLogging("log", "bot.log");
   const config = loadConfig();
   
   // Safety warning for live mode
@@ -32,9 +34,7 @@ async function main() {
     console.log("Starting bot in LIVE mode...\n");
   }
   
-  const tickStreams = config.credentials.pairSymbols.map(
-    (symbol) => new AsterTickStream(config.credentials.wsUrl, symbol)
-  );
+  const tickStreams = [new AsterTickStream(config.credentials.wsUrl, config.credentials.pairSymbols)];
   
   let executor;
   if (config.mode === "live") {

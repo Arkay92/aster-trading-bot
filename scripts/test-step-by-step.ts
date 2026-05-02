@@ -3,16 +3,16 @@
  * Tests each component individually with detailed output
  */
 
-import { EMA } from "./src/lib/indicators/ema";
-import { RSI } from "./src/lib/indicators/rsi";
-import { VirtualBarBuilder } from "./src/lib/virtualBarBuilder";
-import { WatermellonEngine } from "./src/lib/watermellonEngine";
-import { PeachHybridEngine } from "./src/lib/peachHybridEngine";
-import { DryRunExecutor } from "./src/lib/execution/dryRunExecutor";
-import { PositionStateManager } from "./src/lib/state/positionState";
-import { StatePersistence } from "./src/lib/state/statePersistence";
-import { OrderTracker } from "./src/lib/execution/orderTracker";
-import type { Tick, SyntheticBar, WatermellonConfig, PeachConfig } from "./src/lib/types";
+import { EMA } from "../src/lib/indicators/ema";
+import { RSI } from "../src/lib/indicators/rsi";
+import { VirtualBarBuilder } from "../src/lib/virtualBarBuilder";
+import { WatermellonEngine } from "../src/lib/watermellonEngine";
+import { PeachHybridEngine } from "../src/lib/peachHybridEngine";
+import { DryRunExecutor } from "../src/lib/execution/dryRunExecutor";
+import { PositionStateManager } from "../src/lib/state/positionState";
+import { StatePersistence } from "../src/lib/state/statePersistence";
+import { OrderTracker } from "../src/lib/execution/orderTracker";
+import type { Tick, SyntheticBar, WatermellonConfig, PeachConfig } from "../src/lib/types";
 
 console.log("=".repeat(80));
 console.log("STEP-BY-STEP BOT TESTING");

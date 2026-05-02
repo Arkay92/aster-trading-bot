@@ -3,15 +3,15 @@
  * Tests all major components of the trading bot
  */
 
-import { EMA } from "./src/lib/indicators/ema";
-import { RSI } from "./src/lib/indicators/rsi";
-import { VirtualBarBuilder } from "./src/lib/virtualBarBuilder";
-import { WatermellonEngine } from "./src/lib/watermellonEngine";
-import { PeachHybridEngine } from "./src/lib/peachHybridEngine";
-import { DryRunExecutor } from "./src/lib/execution/dryRunExecutor";
-import { PaperExecutor } from "./src/lib/execution/paperExecutor";
-import { loadConfig } from "./src/lib/config";
-import type { Tick, SyntheticBar, WatermellonConfig, PeachConfig } from "./src/lib/types";
+import { EMA } from "../src/lib/indicators/ema";
+import { RSI } from "../src/lib/indicators/rsi";
+import { VirtualBarBuilder } from "../src/lib/virtualBarBuilder";
+import { WatermellonEngine } from "../src/lib/watermellonEngine";
+import { PeachHybridEngine } from "../src/lib/peachHybridEngine";
+import { DryRunExecutor } from "../src/lib/execution/dryRunExecutor";
+import { PaperExecutor } from "../src/lib/execution/paperExecutor";
+import { loadConfig } from "../src/lib/config";
+import type { Tick, SyntheticBar, WatermellonConfig, PeachConfig } from "../src/lib/types";
 
 console.log("=".repeat(80));
 console.log("BOT TESTING SUITE");

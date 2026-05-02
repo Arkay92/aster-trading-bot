@@ -1,31 +1,15 @@
-import { AsterDEX } from "asterdex-sdk";
-import { ethers } from "ethers";
 import type { Credentials, ExecutionAdapter, TradeInstruction } from "../types";
+import { SignedRequestLock } from "./signedRequestLock";
+import { AsterV3Client } from "./asterV3Client";
 
 export class LiveExecutor implements ExecutionAdapter {
-  private readonly futuresClient: ReturnType<AsterDEX["createFuturesClient"]>;
+  private readonly v3: AsterV3Client;
+  private readonly shouldSetLeverage: boolean;
+  private leverageSignatureBroken = false;
 
   constructor(credentials: Credentials) {
-
-    const isTestnet = credentials.rpcUrl.includes("test") || credentials.wsUrl.includes("test");
-    const sdk = new AsterDEX({
-      baseUrl: {
-        spot: credentials.rpcUrl.replace("fapi", "api"),
-        futures: credentials.rpcUrl,
-        websocket: credentials.wsUrl,
-      },
-    });
-
-    const wallet = new ethers.Wallet(credentials.privateKey);
-    const signerAddress = wallet.address;
-    
-    // User address is API_KEY if it's an address, else assume same as signer
-    const userAddress =
-      credentials.apiKey && credentials.apiKey.startsWith("0x") && credentials.apiKey.length === 42
-        ? credentials.apiKey
-        : signerAddress;
-
-    this.futuresClient = sdk.createFuturesClient(userAddress, signerAddress, credentials.privateKey);
+    this.v3 = new AsterV3Client(credentials);
+    this.shouldSetLeverage = (process.env.SET_LEVERAGE_ON_ORDER || "false").toLowerCase() === "true";
   }
 
   private normalizeSymbol(symbol: string): string {
@@ -34,24 +18,34 @@ export class LiveExecutor implements ExecutionAdapter {
 
   async enterLong(order: TradeInstruction): Promise<void> {
     const symbol = this.normalizeSymbol(order.symbol);
-    await this.setLeverage(symbol, order.leverage);
+    await this.trySetLeverage(symbol, order.leverage);
     try {
-      await this.futuresClient.newOrder({
-        symbol: symbol,
-        side: "BUY",
-        type: "MARKET",
-        quantity: order.size.toString(),
-      });
-    } catch (error) {
-      const err = error instanceof Error ? error.message : String(error);
-      if (err.includes("position side")) {
-        await this.futuresClient.newOrder({
+      await SignedRequestLock.run(async () =>
+        this.v3.newOrder({
           symbol: symbol,
           side: "BUY",
           type: "MARKET",
           quantity: order.size.toString(),
-          positionSide: "LONG",
-        });
+          priceHint: order.price,
+        }),
+      );
+    } catch (error) {
+      const err = error instanceof Error ? error.message : String(error);
+      if (err.includes("position side")) {
+        await SignedRequestLock.run(async () =>
+          this.v3.newOrder({
+            symbol: symbol,
+            side: "BUY",
+            type: "MARKET",
+            quantity: order.size.toString(),
+            priceHint: order.price,
+            positionSide: "LONG",
+          }),
+        );
+      } else if (err.includes("Signature check failed")) {
+        throw new Error(
+          "Signature check failed on trade endpoint. Verify Aster account-side signer authorization for this wallet, API permissions/IP whitelist, and that account and signer match expected trading auth mode.",
+        );
       } else {
         throw error;
       }
@@ -61,24 +55,34 @@ export class LiveExecutor implements ExecutionAdapter {
 
   async enterShort(order: TradeInstruction): Promise<void> {
     const symbol = this.normalizeSymbol(order.symbol);
-    await this.setLeverage(symbol, order.leverage);
+    await this.trySetLeverage(symbol, order.leverage);
     try {
-      await this.futuresClient.newOrder({
-        symbol: symbol,
-        side: "SELL",
-        type: "MARKET",
-        quantity: order.size.toString(),
-      });
-    } catch (error) {
-      const err = error instanceof Error ? error.message : String(error);
-      if (err.includes("position side")) {
-        await this.futuresClient.newOrder({
+      await SignedRequestLock.run(async () =>
+        this.v3.newOrder({
           symbol: symbol,
           side: "SELL",
           type: "MARKET",
           quantity: order.size.toString(),
-          positionSide: "SHORT",
-        });
+          priceHint: order.price,
+        }),
+      );
+    } catch (error) {
+      const err = error instanceof Error ? error.message : String(error);
+      if (err.includes("position side")) {
+        await SignedRequestLock.run(async () =>
+          this.v3.newOrder({
+            symbol: symbol,
+            side: "SELL",
+            type: "MARKET",
+            quantity: order.size.toString(),
+            priceHint: order.price,
+            positionSide: "SHORT",
+          }),
+        );
+      } else if (err.includes("Signature check failed")) {
+        throw new Error(
+          "Signature check failed on trade endpoint. Verify Aster account-side signer authorization for this wallet, API permissions/IP whitelist, and that account and signer match expected trading auth mode.",
+        );
       } else {
         throw error;
       }
@@ -105,25 +109,31 @@ export class LiveExecutor implements ExecutionAdapter {
       const quantity = Math.abs(positionAmt).toString();
 
       try {
-        await this.futuresClient.newOrder({
-          symbol: symbol,
-          side,
-          type: "MARKET",
-          quantity,
-          reduceOnly: "true",
-        } as any);
-      } catch (error) {
-        const err = error instanceof Error ? error.message : String(error);
-        if (err.includes("position side")) {
-          const positionSide = positionAmt > 0 ? "LONG" : "SHORT";
-          await this.futuresClient.newOrder({
+        await SignedRequestLock.run(async () =>
+          this.v3.newOrder({
             symbol: symbol,
             side,
             type: "MARKET",
             quantity,
-            positionSide,
-            reduceOnly: "true",
-          } as any);
+            priceHint: Number(meta?.price || 0),
+            reduceOnly: "true"
+          }),
+        );
+      } catch (error) {
+        const err = error instanceof Error ? error.message : String(error);
+        if (err.includes("position side")) {
+          const positionSide = positionAmt > 0 ? "LONG" : "SHORT";
+          await SignedRequestLock.run(async () =>
+            this.v3.newOrder({
+              symbol: symbol,
+              side,
+              type: "MARKET",
+              quantity,
+              priceHint: Number(meta?.price || 0),
+              positionSide,
+              reduceOnly: "true",
+            }),
+          );
         } else {
           throw error;
         }
@@ -137,16 +147,28 @@ export class LiveExecutor implements ExecutionAdapter {
   }
 
   private async setLeverage(symbol: string, leverage: number): Promise<void> {
-    await this.futuresClient.changeLeverage({
-      symbol: symbol,
-      leverage,
-    });
+    await SignedRequestLock.run(async () => this.v3.changeLeverage(symbol, leverage));
+  }
+
+  private async trySetLeverage(symbol: string, leverage: number): Promise<void> {
+    if (!this.shouldSetLeverage || this.leverageSignatureBroken) return;
+    try {
+      await this.setLeverage(symbol, leverage);
+    } catch (error) {
+      const err = error instanceof Error ? error.message : String(error);
+      if (err.includes("Signature check failed")) {
+        this.leverageSignatureBroken = true;
+        console.warn("[LiveExecutor] changeLeverage signature check failed; disabling leverage updates and continuing with order flow");
+        return;
+      }
+      console.warn(`[LiveExecutor] changeLeverage failed on ${symbol}: ${err}; continuing with order flow`);
+    }
   }
 
   private async getCurrentPosition(symbol: string): Promise<{ positionAmt: string; symbol: string; entryPrice?: string } | null> {
     try {
-      const account = await this.futuresClient.getAccount();
-      const position = account.positions?.find((p: any) => p.symbol === symbol);
+      const account = await SignedRequestLock.run(async () => this.v3.getAccount());
+      const position = account.positions?.find((p: { symbol: string; positionAmt: string; entryPrice?: string }) => p.symbol === symbol);
       if (position && position.positionAmt !== "0") {
         return {
           positionAmt: position.positionAmt.toString(),
@@ -157,8 +179,8 @@ export class LiveExecutor implements ExecutionAdapter {
       return null;
     } catch {
       try {
-        const positions = await this.futuresClient.getPositionRisk(symbol);
-        const position = positions.find((p: any) => p.symbol === symbol);
+        const positions = await SignedRequestLock.run(async () => this.v3.getPositionRisk(symbol));
+        const position = positions.find((p: { symbol: string; positionAmt: string }) => p.symbol === symbol);
         if (position && position.positionAmt !== "0") {
           return {
             positionAmt: position.positionAmt.toString(),
