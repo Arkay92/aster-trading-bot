@@ -197,10 +197,10 @@ export class AsterV3Client {
       version: "1",
       chainId: 1666,
       verifyingContract: "0x0000000000000000000000000000000000000000",
-    } as const;
+    };
     const types = {
       Message: [{ name: "msg", type: "string" }],
-    } as const;
+    };
     return this.wallet.signTypedData(domain, types, { msg: query });
   }
 

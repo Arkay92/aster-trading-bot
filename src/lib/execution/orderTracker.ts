@@ -2,6 +2,7 @@ import type { TradeInstruction } from "../types";
 
 type OrderConfirmation = {
   orderId: string;
+  symbol: string;
   side: "long" | "short";
   size: number;
   price: number;
@@ -17,6 +18,7 @@ export class OrderTracker {
   trackOrder(order: TradeInstruction, orderId: string): void {
     this.pendingOrders.set(orderId, {
       orderId,
+      symbol: order.symbol,
       side: order.side,
       size: order.size,
       price: order.price,
@@ -45,10 +47,16 @@ export class OrderTracker {
     return false;
   }
 
-  confirmByPositionChange(side: "long" | "short", size: number): void {
+  confirmByPositionChange(symbol: string, side: "long" | "short", size: number): void {
+    const normalizedSymbol = symbol.toUpperCase();
     // Find matching pending order
     for (const [orderId, order] of this.pendingOrders.entries()) {
-      if (!order.confirmed && order.side === side && Math.abs(order.size - size) < 0.0001) {
+      if (
+        !order.confirmed &&
+        order.symbol.toUpperCase() === normalizedSymbol &&
+        order.side === side &&
+        Math.abs(order.size - size) < 0.001
+      ) {
         this.confirmOrder(orderId);
         break;
       }

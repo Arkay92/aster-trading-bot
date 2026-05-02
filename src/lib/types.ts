@@ -139,6 +139,9 @@ export type RiskConfig = {
   perStrategyMaxPositions?: Partial<Record<StrategyType, number>>;
   quietSignalLogs?: boolean; // Suppress noisy non-actionable signal logs
   strategyOwnershipTimeoutBars?: number; // Allow strategy takeover after N bars
+  maxDailyLossUsdt?: number; // Hard stop once realized daily loss exceeds this
+  maxConsecutiveLosses?: number; // Hard stop after N losing closes in a row
+  minTradeIntervalMs?: number; // Per-symbol minimum time between new entries
 };
 
 export type StrategyType =

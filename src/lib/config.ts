@@ -103,6 +103,9 @@ const envSchema = z.object({
   MAX_POSITIONS_SWING: z.coerce.number().optional(),
   MAX_POSITIONS_EMA_CROSS: z.coerce.number().optional(),
   MAX_POSITIONS_RSI_REVERSION: z.coerce.number().optional(),
+  MAX_DAILY_LOSS_USDT: z.coerce.number().positive().optional(),
+  MAX_CONSECUTIVE_LOSSES: z.coerce.number().int().positive().optional(),
+  MIN_TRADE_INTERVAL_MS: z.coerce.number().int().positive().optional(),
 });
 
 const formatErrors = (issues: z.ZodIssue[]): string =>
@@ -203,6 +206,9 @@ export const loadConfig = (overrides?: Partial<AppConfig>): AppConfig => {
     adxThreshold: env.ADX_THRESHOLD ?? 25,
     quietSignalLogs: env.QUIET_SIGNAL_LOGS ?? true,
     strategyOwnershipTimeoutBars: env.STRATEGY_OWNERSHIP_TIMEOUT_BARS ?? 6,
+    maxDailyLossUsdt: env.MAX_DAILY_LOSS_USDT ?? undefined,
+    maxConsecutiveLosses: env.MAX_CONSECUTIVE_LOSSES ?? undefined,
+    minTradeIntervalMs: env.MIN_TRADE_INTERVAL_MS ?? 15_000,
     perStrategyMaxPositions: {
       "watermellon": env.MAX_POSITIONS_WATERMELLON ?? env.MAX_POSITIONS_PER_STRATEGY ?? env.MAX_POSITIONS ?? 1,
       "peach-hybrid": env.MAX_POSITIONS_PEACH_HYBRID ?? env.MAX_POSITIONS_PER_STRATEGY ?? env.MAX_POSITIONS ?? 1,

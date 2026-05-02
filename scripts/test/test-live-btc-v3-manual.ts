@@ -38,10 +38,10 @@ async function signQueryString(query: string): Promise<string> {
     version: "1",
     chainId: 1666,
     verifyingContract: "0x0000000000000000000000000000000000000000",
-  } as const;
+  };
   const types = {
     Message: [{ name: "msg", type: "string" }],
-  } as const;
+  };
   return wallet.signTypedData(domain, types, { msg: query });
 }
 
@@ -150,4 +150,3 @@ main().catch((e) => {
   console.error("[MANUAL-V3] Failed:", e);
   process.exit(1);
 });
-

@@ -3,15 +3,15 @@
  * Tests all major components of the trading bot
  */
 
-import { EMA } from "../src/lib/indicators/ema";
-import { RSI } from "../src/lib/indicators/rsi";
-import { VirtualBarBuilder } from "../src/lib/virtualBarBuilder";
-import { WatermellonEngine } from "../src/lib/watermellonEngine";
-import { PeachHybridEngine } from "../src/lib/peachHybridEngine";
-import { DryRunExecutor } from "../src/lib/execution/dryRunExecutor";
-import { PaperExecutor } from "../src/lib/execution/paperExecutor";
-import { loadConfig } from "../src/lib/config";
-import type { Tick, SyntheticBar, WatermellonConfig, PeachConfig } from "../src/lib/types";
+import { EMA } from "../../src/lib/indicators/ema";
+import { RSI } from "../../src/lib/indicators/rsi";
+import { VirtualBarBuilder } from "../../src/lib/virtualBarBuilder";
+import { WatermellonEngine } from "../../src/lib/watermellonEngine";
+import { PeachHybridEngine } from "../../src/lib/peachHybridEngine";
+import { DryRunExecutor } from "../../src/lib/execution/dryRunExecutor";
+import { PaperExecutor } from "../../src/lib/execution/paperExecutor";
+import { loadConfig } from "../../src/lib/config";
+import type { Tick, SyntheticBar, WatermellonConfig, PeachConfig } from "../../src/lib/types";
 
 console.log("=".repeat(80));
 console.log("BOT TESTING SUITE");
@@ -188,7 +188,7 @@ console.log("\n[TEST 6] Testing Dry Run Executor...");
     
     const logs = executor.logs;
     console.log(`  Executor logged ${logs.length} entries`);
-    logs.forEach((log, i) => {
+    logs.forEach((log: { type: string }, i: number) => {
       console.log(`  Log ${i + 1}:`, log.type);
     });
     console.log("✅ Dry Run Executor test passed");
