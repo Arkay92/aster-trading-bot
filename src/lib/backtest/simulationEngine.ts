@@ -30,17 +30,26 @@ export class SimulationEngine {
   private readonly executor: ExecutionSimulator;
   private readonly recentBars = new Map<string, SyntheticBar[]>();
   private readonly startingBalance: number;
+  private readonly options: BacktestOptions;
 
   constructor(
     private readonly config: AppConfig,
     options: BacktestOptions = {},
   ) {
+    this.options = options;
     this.startingBalance = options.startingBalance ?? config.paperTrading?.startingBalance ?? 10_000;
     this.executor = new ExecutionSimulator({
       startingBalance: this.startingBalance,
       positionSizeUsdt: options.positionSizeUsdt ?? config.risk.maxPositionSize,
       feeRatePct: options.feeRatePct ?? 0.04,
       slippagePct: options.slippagePct ?? 0.02,
+      pessimisticMode: options.pessimisticMode,
+      tickSize: options.tickSize,
+      worseEntryTicks: options.worseEntryTicks,
+      worseExitTicks: options.worseExitTicks,
+      missedFillPct: options.missedFillPct,
+      latencyBars: options.latencyBars,
+      randomSeed: options.randomSeed,
     });
   }
 
@@ -48,6 +57,7 @@ export class SimulationEngine {
     let lastBar: HistoricalBar | undefined;
 
     for (const bar of bars) {
+      this.executor.onBar();
       const symbol = this.toPerpSymbol(bar.symbol);
       const engine = this.getEngine(symbol);
       const context = this.getContext(symbol, bar);
@@ -55,7 +65,7 @@ export class SimulationEngine {
       this.pushRecentBar(symbol, bar);
 
       if (signal) {
-        this.executor.onSignal(symbol, signal, bar);
+        this.executor.onSignal(symbol, signal, bar, this.getVolatilityRegime(symbol, bar.close));
         engine.onPositionChange?.(signal.type);
       }
 
@@ -117,6 +127,17 @@ export class SimulationEngine {
     if (movePct > 1) return "trending";
     if (avgRangePct > 1) return "volatile";
     return "ranging";
+  }
+
+  private getVolatilityRegime(symbol: string, price: number): string {
+    const recent = this.recentBars.get(symbol) ?? [];
+    if (recent.length < 10 || price <= 0) return "unknown";
+    const ranges = recent.slice(-20).map((bar) => ((bar.high - bar.low) / bar.close) * 100);
+    const avgRangePct = ranges.reduce((sum, value) => sum + value, 0) / ranges.length;
+    if (avgRangePct < 0.05) return "too-low";
+    if (avgRangePct > 3) return "extreme";
+    if (avgRangePct > 1.5) return "elevated";
+    return "normal";
   }
 
   private isWickRejection(bar: SyntheticBar): boolean {

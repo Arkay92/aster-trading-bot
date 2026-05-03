@@ -12,13 +12,14 @@ export type TradeRecord = {
   reason: string;
   leverage: number;
   strategy?: string;
+  volatilityRegime?: string;
 };
 
 export class TradeStatistics {
   private trades: TradeRecord[] = [];
   private currentTrades = new Map<string, Partial<TradeRecord>>();
 
-  startTrade(symbol: string, side: "long" | "short", entryPrice: number, size: number, leverage: number, strategy?: string): void {
+  startTrade(symbol: string, side: "long" | "short", entryPrice: number, size: number, leverage: number, strategy?: string, context?: { volatilityRegime?: string }): void {
     this.currentTrades.set(symbol, {
       id: `trade-${Date.now()}-${symbol}`,
       symbol,
@@ -28,6 +29,7 @@ export class TradeStatistics {
       size,
       leverage,
       strategy,
+      volatilityRegime: context?.volatilityRegime,
     });
   }
 
@@ -133,6 +135,24 @@ export class TradeStatistics {
     for (const strategy of strategies) {
       const trades = this.trades.filter((trade) => (trade.strategy || "unknown") === strategy);
       result[strategy] = this.calculateStats(trades);
+    }
+    return result;
+  }
+
+  getHourStats(): Record<string, ReturnType<TradeStatistics["getStats"]>> {
+    const hours = new Set(this.trades.map((trade) => new Date(trade.exitTime).getUTCHours().toString().padStart(2, "0")));
+    const result: Record<string, ReturnType<TradeStatistics["getStats"]>> = {};
+    for (const hour of hours) {
+      result[hour] = this.calculateStats(this.trades.filter((trade) => new Date(trade.exitTime).getUTCHours().toString().padStart(2, "0") === hour));
+    }
+    return result;
+  }
+
+  getVolatilityRegimeStats(): Record<string, ReturnType<TradeStatistics["getStats"]>> {
+    const regimes = new Set(this.trades.map((trade) => trade.volatilityRegime || "unknown"));
+    const result: Record<string, ReturnType<TradeStatistics["getStats"]>> = {};
+    for (const regime of regimes) {
+      result[regime] = this.calculateStats(this.trades.filter((trade) => (trade.volatilityRegime || "unknown") === regime));
     }
     return result;
   }

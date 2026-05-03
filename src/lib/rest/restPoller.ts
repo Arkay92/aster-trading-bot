@@ -7,6 +7,7 @@ type AsterPositionResponse = {
   entryPrice: string;
   markPrice: string;
   unRealizedProfit: string;
+  unrealizedProfit?: string;
   liquidationPrice: string;
   leverage: string;
   marginType: string;
@@ -28,6 +29,8 @@ type PositionLike = {
   entryPrice?: string;
   markPrice?: string;
   unRealizedProfit?: string;
+  unrealizedProfit?: string;
+  unrealisedProfit?: string;
   liquidationPrice?: string;
   leverage?: string;
   marginType?: string;
@@ -52,6 +55,10 @@ export class RestPoller {
 
   private normalizeSymbol(symbol: string): string {
     return symbol.toUpperCase().replace(/-PERP$/, "");
+  }
+
+  private getUnrealizedProfit(position?: PositionLike): string {
+    return position?.unRealizedProfit ?? position?.unrealizedProfit ?? position?.unrealisedProfit ?? "0";
   }
 
   start(intervalMs: number = 2000): void {
@@ -123,7 +130,7 @@ export class RestPoller {
             positionAmt: pos.positionAmt || "0",
             entryPrice: pos.entryPrice || "0",
             markPrice: pos.markPrice || "0",
-            unRealizedProfit: pos.unRealizedProfit || "0",
+            unRealizedProfit: this.getUnrealizedProfit(pos),
             liquidationPrice: pos.liquidationPrice || "0",
             leverage: pos.leverage || "1",
             marginType: pos.marginType || "cross",
@@ -162,7 +169,18 @@ export class RestPoller {
           const positions = await SignedRequestLock.run(async () => this.v3.getPositionRisk(symbol));
           const pos = positions.find((p: PositionLike) => p.symbol === symbol);
           if (pos) {
-            this.onPositionUpdate?.(pos as AsterPositionResponse);
+            this.onPositionUpdate?.({
+              positionAmt: pos.positionAmt || "0",
+              entryPrice: pos.entryPrice || "0",
+              markPrice: pos.markPrice || "0",
+              unRealizedProfit: this.getUnrealizedProfit(pos),
+              liquidationPrice: pos.liquidationPrice || "0",
+              leverage: pos.leverage || "1",
+              marginType: pos.marginType || "cross",
+              isolatedMargin: pos.isolatedMargin || "0",
+              positionSide: pos.positionSide || "BOTH",
+              symbol,
+            });
           } else {
             this.onPositionUpdate?.({
               positionAmt: "0",

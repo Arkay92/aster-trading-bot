@@ -105,4 +105,18 @@ describe("LiveExecutor retry handling", () => {
 
     expect(mockNewOrder).toHaveBeenCalledTimes(1);
   });
+
+  it("refuses non-reduceOnly close fallback when refreshed position is still open", async () => {
+    mockGetAccount
+      .mockResolvedValueOnce({ positions: [{ symbol: "BTCUSDT", positionAmt: "-0.001", entryPrice: "100" }] })
+      .mockResolvedValueOnce({ positions: [{ symbol: "BTCUSDT", positionAmt: "-0.001", entryPrice: "100" }] });
+    mockNewOrder.mockRejectedValueOnce(new Error("-2022 ReduceOnly Order is rejected"));
+    const executor = new LiveExecutor(credentials, {
+      risk: { execution: { maxOrderRetries: 0 } },
+    });
+
+    await expect(executor.closePosition("BTCUSDT-PERP", "atr-stop", { price: 100 })).rejects.toThrow("refusing non-reduceOnly fallback");
+
+    expect(mockNewOrder).toHaveBeenCalledTimes(1);
+  });
 });

@@ -132,9 +132,19 @@ const envSchema = z.object({
   REQUIRE_SIGNAL_CONFIRMATION: envBoolean.optional(),
   SAME_DIRECTION_COOLDOWN_MINUTES: z.coerce.number().int().positive().optional(),
   MAX_DAILY_LOSS_PCT: z.coerce.number().positive().optional(),
+  MAX_PORTFOLIO_EXPOSURE_USDT: z.coerce.number().positive().optional(),
+  MIN_ATR_PCT: z.coerce.number().nonnegative().optional(),
+  MAX_ATR_PCT: z.coerce.number().positive().optional(),
+  EXTREME_ATR_PCT: z.coerce.number().positive().optional(),
+  EXTREME_VOL_SIZE_MULTIPLIER: z.coerce.number().positive().max(1).optional(),
+  MAX_LONG_FUNDING_RATE: z.coerce.number().optional(),
+  MIN_SHORT_FUNDING_RATE: z.coerce.number().optional(),
+  MAX_PREMIUM_PCT: z.coerce.number().positive().optional(),
   ORDER_MAX_RETRIES: z.coerce.number().int().min(0).optional(),
   ORDER_RETRY_BASE_DELAY_MS: z.coerce.number().int().positive().optional(),
   ORDER_RETRY_MAX_DELAY_MS: z.coerce.number().int().positive().optional(),
+  MAX_SPREAD_PCT: z.coerce.number().positive().optional(),
+  MIN_BOOK_DEPTH_USDT: z.coerce.number().positive().optional(),
   MAX_DIRECTIONAL_POSITIONS: z.coerce.number().int().positive().optional(),
 });
 
@@ -286,6 +296,14 @@ export const loadConfig = (overrides?: Partial<AppConfig>): AppConfig => {
     requireSignalConfirmation: env.REQUIRE_SIGNAL_CONFIRMATION ?? true,
     sameDirectionCooldownMinutes: env.SAME_DIRECTION_COOLDOWN_MINUTES ?? 60,
     maxDailyLossPct: env.MAX_DAILY_LOSS_PCT ?? 2.0,
+    maxPortfolioExposureUsdt: env.MAX_PORTFOLIO_EXPOSURE_USDT ?? env.MAX_POSITION_USDT * (env.MAX_POSITIONS ?? 1),
+    minAtrPct: env.MIN_ATR_PCT ?? 0.03,
+    maxAtrPct: env.MAX_ATR_PCT ?? 3.0,
+    extremeAtrPct: env.EXTREME_ATR_PCT ?? 1.5,
+    extremeVolatilitySizeMultiplier: env.EXTREME_VOL_SIZE_MULTIPLIER ?? 0.5,
+    maxLongFundingRate: env.MAX_LONG_FUNDING_RATE ?? 0.0005,
+    minShortFundingRate: env.MIN_SHORT_FUNDING_RATE ?? -0.0005,
+    maxPremiumPct: env.MAX_PREMIUM_PCT ?? 0.08,
     execution: {
       maxEntrySlippagePct: 0.15,
       limitOrderTimeoutMs: 500,
@@ -293,6 +311,8 @@ export const loadConfig = (overrides?: Partial<AppConfig>): AppConfig => {
       maxOrderRetries: env.ORDER_MAX_RETRIES ?? 2,
       orderRetryBaseDelayMs: env.ORDER_RETRY_BASE_DELAY_MS ?? 250,
       orderRetryMaxDelayMs: env.ORDER_RETRY_MAX_DELAY_MS ?? 5_000,
+      maxSpreadPct: env.MAX_SPREAD_PCT ?? 0.08,
+      minBookDepthUsdt: env.MIN_BOOK_DEPTH_USDT ?? undefined,
     },
   };
 

@@ -2,6 +2,9 @@ export type Tick = {
   symbol: string;
   timestamp: number;
   price: number;
+  bid?: number;
+  ask?: number;
+  quoteOnly?: boolean;
   size?: number;
   side?: "buy" | "sell";
 };
@@ -156,6 +159,8 @@ export type ExecutionConfig = {
   maxOrderRetries?: number;
   orderRetryBaseDelayMs?: number;
   orderRetryMaxDelayMs?: number;
+  maxSpreadPct?: number;
+  minBookDepthUsdt?: number;
 };
 
 export type RiskConfig = {
@@ -195,6 +200,14 @@ export type RiskConfig = {
   requireSignalConfirmation?: boolean;
   sameDirectionCooldownMinutes?: number;
   maxDailyLossPct?: number;
+  maxPortfolioExposureUsdt?: number;
+  minAtrPct?: number;
+  maxAtrPct?: number;
+  extremeAtrPct?: number;
+  extremeVolatilitySizeMultiplier?: number;
+  maxLongFundingRate?: number;
+  minShortFundingRate?: number;
+  maxPremiumPct?: number;
   atrLength?: number;
   atrStopMultiplier?: number;
   atrTakeProfitR?: number;
@@ -270,7 +283,14 @@ export type ExecutionAdapter = {
   enterLong(order: TradeInstruction): Promise<void>;
   enterShort(order: TradeInstruction): Promise<void>;
   closePosition(symbol: string, reason: string, meta?: Record<string, unknown>): Promise<void>;
+  updateTick?(tick: Tick): void;
   getCurrentTick?(symbol: string): Tick | null;
+  isSymbolBlacklisted?(symbol: string): boolean;
+  getPremiumIndex?(symbol?: string): Promise<{
+    markPrice?: string | number;
+    indexPrice?: string | number;
+    lastFundingRate?: string | number;
+  }>;
 };
 export interface Indicator {
   update(value: number, ...args: number[]): number | null;

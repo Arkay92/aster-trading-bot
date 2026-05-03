@@ -36,7 +36,15 @@ export type V3Balance = {
 };
 
 type V3Account = {
-  positions?: Array<{ symbol: string; positionAmt: string; entryPrice?: string }>;
+  positions?: Array<{
+    symbol: string;
+    positionAmt: string;
+    entryPrice?: string;
+    markPrice?: string;
+    unRealizedProfit?: string;
+    unrealizedProfit?: string;
+    unrealisedProfit?: string;
+  }>;
   assets?: Array<{ asset: string; balance?: string; walletBalance?: string; availableBalance?: string; maxWithdrawAmount?: string }>;
 };
 
@@ -127,6 +135,12 @@ export class AsterV3Client {
     const res = await fetch(`${this.baseUrl}/fapi/v3/ticker/24hr`);
     if (!res.ok) throw new Error(await res.text());
     return (await res.json()) as any[];
+  }
+
+  async getDepth(symbol: string, limit = 20): Promise<{ bids: [string, string][]; asks: [string, string][] }> {
+    const res = await fetch(`${this.baseUrl}/fapi/v3/depth?symbol=${encodeURIComponent(symbol)}&limit=${limit}`);
+    if (!res.ok) throw new Error(await res.text());
+    return (await res.json()) as { bids: [string, string][]; asks: [string, string][] };
   }
 
   private async normalizeOrderQuantity(

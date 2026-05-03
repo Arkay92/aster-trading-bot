@@ -10,11 +10,11 @@ type TickEvents = {
 
 // AsterDEX WebSocket format: Based on reference code, uses Binance-compatible format
 const defaultSubscribePayload = (pairs: string[]) => {
-  const params = pairs.map(pair => {
+  const params = pairs.flatMap(pair => {
     // Convert ASTERUSDT-PERP to ASTERUSDT (remove -PERP suffix, uppercase)
     const streamName = pair.toUpperCase().replace(/-PERP$/, "");
-    // Binance futures format: lowercase symbol@aggTrade
-    return `${streamName.toLowerCase()}@aggTrade`;
+    const normalized = streamName.toLowerCase();
+    return [`${normalized}@aggTrade`, `${normalized}@bookTicker`];
   });
 
   return {
@@ -43,17 +43,27 @@ const defaultParser: MessageParser = (raw) => {
 
     // AsterDEX WebSocket format (combined streams): { stream: "asterusdt@aggTrade", data: { ... } }
     if (payload.stream && payload.data) {
-      const trade = payload.data;
-      const rawSymbol = (trade.s || payload.stream.split("@")[0] || "").toUpperCase();
+      const data = payload.data;
+      const stream = String(payload.stream);
+      const rawSymbol = (data.s || stream.split("@")[0] || "").toUpperCase();
       const symbol = rawSymbol.endsWith("-PERP") ? rawSymbol : `${rawSymbol}-PERP`;
-      const price = coerceNumber(trade.p);
-      const size = coerceNumber(trade.q);
-      const timestamp = coerceNumber(trade.T) ?? Date.now();
+
+      if (stream.includes("@bookTicker")) {
+        const bid = coerceNumber(data.b);
+        const ask = coerceNumber(data.a);
+        const timestamp = coerceNumber(data.T) ?? coerceNumber(data.E) ?? Date.now();
+        if (bid === null || ask === null || bid <= 0 || ask <= 0) return null;
+        return [{ symbol, price: (bid + ask) / 2, bid, ask, size: 0, timestamp, quoteOnly: true }];
+      }
+
+      const price = coerceNumber(data.p);
+      const size = coerceNumber(data.q);
+      const timestamp = coerceNumber(data.T) ?? Date.now();
 
       if (price === null) return null;
 
       // m is the maker flag. If m is true, the buyer is the maker, so the trade is a SELL.
-      const side: "buy" | "sell" = trade.m ? "sell" : "buy";
+      const side: "buy" | "sell" = data.m ? "sell" : "buy";
 
       return [{ symbol, price, size: size ?? 0, timestamp, side }];
     }
@@ -96,6 +106,7 @@ export class AsterTickStream {
   private emittedTickCount = 0;
   private droppedTickCount = 0;
   private lastFlowLog = 0;
+  private latestQuotes = new Map<string, { bid: number; ask: number }>();
 
   constructor(
     private readonly url: string,
@@ -168,8 +179,13 @@ export class AsterTickStream {
         // We normalize to ASTERUSDT-PERP format
         const normalizedSymbol = tick.symbol.toUpperCase();
         if (this.pairSymbols.some(s => s.toUpperCase() === normalizedSymbol)) {
+          if (tick.bid && tick.ask) this.latestQuotes.set(normalizedSymbol, { bid: tick.bid, ask: tick.ask });
+          const quote = this.latestQuotes.get(normalizedSymbol);
+          const enrichedTick = quote && (!tick.bid || !tick.ask)
+            ? { ...tick, bid: quote.bid, ask: quote.ask }
+            : tick;
           this.emittedTickCount++;
-          this.emitter.emit("tick", tick);
+          this.emitter.emit("tick", enrichedTick);
         } else {
           this.droppedTickCount++;
         }

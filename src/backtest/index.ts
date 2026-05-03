@@ -14,6 +14,10 @@ type CliArgs = {
   positionSize?: number;
   feeRate?: number;
   slippage?: number;
+  pessimistic?: boolean;
+  tickSize?: number;
+  missedFillPct?: number;
+  latencyBars?: number;
 };
 
 async function main() {
@@ -32,6 +36,10 @@ async function main() {
     positionSizeUsdt: args.positionSize ?? config.risk.maxPositionSize,
     feeRatePct: args.feeRate,
     slippagePct: args.slippage,
+    pessimisticMode: args.pessimistic,
+    tickSize: args.tickSize,
+    missedFillPct: args.missedFillPct,
+    latencyBars: args.latencyBars,
   });
   const result = engine.run(bars);
 
@@ -47,7 +55,12 @@ async function main() {
     returnPct: result.metrics.returnPct.toFixed(2),
     maxDrawdown: result.metrics.maxDrawdown.toFixed(4),
     profitFactor: Number.isFinite(result.metrics.profitFactor) ? result.metrics.profitFactor.toFixed(2) : "Infinity",
+    expectancy: result.metrics.expectancy.toFixed(4),
   });
+  if (Object.keys(result.metrics.byVolatilityRegime).length > 0) {
+    console.log("PnL by volatility regime");
+    console.table(result.metrics.byVolatilityRegime);
+  }
 
   if (result.trades.length > 0) {
     console.table(result.trades.slice(-10).map((trade) => ({
@@ -69,6 +82,10 @@ function parseArgs(args: string[]): CliArgs {
     if (!arg.startsWith("--")) continue;
 
     const [key, inlineValue] = arg.slice(2).split("=");
+    if (key === "pessimistic" && inlineValue === undefined) {
+      parsed.pessimistic = true;
+      continue;
+    }
     const value = inlineValue ?? next;
     if (inlineValue === undefined) i++;
 
@@ -78,6 +95,10 @@ function parseArgs(args: string[]): CliArgs {
     else if (key === "position-size") parsed.positionSize = Number(value);
     else if (key === "fee-rate") parsed.feeRate = Number(value);
     else if (key === "slippage") parsed.slippage = Number(value);
+    else if (key === "pessimistic") parsed.pessimistic = value !== "false";
+    else if (key === "tick-size") parsed.tickSize = Number(value);
+    else if (key === "missed-fill-pct") parsed.missedFillPct = Number(value);
+    else if (key === "latency-bars") parsed.latencyBars = Number(value);
   }
   return parsed;
 }

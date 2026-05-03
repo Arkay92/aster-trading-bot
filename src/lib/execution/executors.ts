@@ -8,7 +8,11 @@ import { AsterV3Client } from "./asterV3Client";
 export type LogEntry =
   | { type: "enter"; side: "long" | "short"; order: TradeInstruction }
   | { type: "close"; reason: string; meta?: Record<string, unknown>; timestamp: number }
-  | { type: "info"; message: string; payload?: any };
+  | { type: "info"; message: string; payload?: unknown };
+
+type OrderResponse = { orderId?: string | number };
+type OpenOrder = { orderId?: string | number };
+type LivePosition = { symbol: string; positionAmt: string; entryPrice?: string };
 
 export abstract class BaseExecutor {
   protected history: LogEntry[] = [];
@@ -137,6 +141,7 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
   private lastTicks = new Map<string, Tick>();
   private symbolMaxLeverage = new Map<string, number>();
   private symbolBlacklist = new Map<string, number>();
+  private inFlightOrderKeys = new Set<string>();
 
   constructor(credentials: Credentials, private readonly config?: any) {
     super();
@@ -151,6 +156,10 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
 
   getCurrentTick(symbol: string): Tick | null {
     return this.lastTicks.get(symbol) || null;
+  }
+
+  async getPremiumIndex(symbol?: string): Promise<{ markPrice?: string | number; indexPrice?: string | number; lastFundingRate?: string | number }> {
+    return this.v3.getPremiumIndex(symbol);
   }
 
   private normalizeSymbol(symbol: string): string {
@@ -217,10 +226,38 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
 
   private async smartExecute(order: TradeInstruction, side: "BUY" | "SELL"): Promise<void> {
     const symbol = this.normalizeSymbol(order.symbol);
+    const inFlightKey = `entry:${symbol}:${side}`;
+    if (this.inFlightOrderKeys.has(inFlightKey)) {
+      throw new Error(`Duplicate entry blocked while ${symbol} ${side} order is in flight`);
+    }
+    this.inFlightOrderKeys.add(inFlightKey);
+    try {
     
     // 1. Slippage Guard
     const tick = this.getCurrentTick(order.symbol);
     const executionConfig = this.config?.risk?.execution;
+    if (tick?.bid && tick?.ask && tick.bid > 0 && tick.ask > tick.bid && executionConfig?.maxSpreadPct) {
+      const mid = (tick.bid + tick.ask) / 2;
+      const spreadPct = ((tick.ask - tick.bid) / mid) * 100;
+      if (spreadPct > executionConfig.maxSpreadPct) {
+        this.persist({ type: "info", message: `Entry blocked by spread guard`, payload: { symbol, spreadPct: spreadPct.toFixed(4) + "%", max: executionConfig.maxSpreadPct + "%" } });
+        throw new Error(`Spread too wide: ${spreadPct.toFixed(4)}%`);
+      }
+    }
+    if (executionConfig?.minBookDepthUsdt) {
+      try {
+        const depth = await this.v3.getDepth(symbol, 20);
+        const sideBook = side === "BUY" ? depth.asks : depth.bids;
+        const availableDepthUsdt = sideBook.reduce((sum, [price, qty]) => sum + Number(price) * Number(qty), 0);
+        if (availableDepthUsdt < executionConfig.minBookDepthUsdt) {
+          this.persist({ type: "info", message: `Entry blocked by thin-book guard`, payload: { symbol, availableDepthUsdt: availableDepthUsdt.toFixed(2), minBookDepthUsdt: executionConfig.minBookDepthUsdt } });
+          throw new Error(`Book depth too thin: ${availableDepthUsdt.toFixed(2)} USDT`);
+        }
+      } catch (error) {
+        this.persist({ type: "info", message: `Depth check failed; blocking entry`, payload: { symbol, error: String(error) } });
+        throw error;
+      }
+    }
     if (tick && executionConfig?.maxEntrySlippagePct) {
       const slippage = Math.abs((tick.price - order.price) / order.price) * 100;
       if (slippage > executionConfig.maxEntrySlippagePct) {
@@ -249,7 +286,7 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
           )
         );
         
-        const orderId = (res as any).orderId;
+        const orderId = (res as OrderResponse).orderId;
         if (!orderId) throw new Error("No orderId returned from LIMIT order");
 
         // Wait for fill
@@ -258,11 +295,11 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
 
         // Check if filled
         const openOrders = await SignedRequestLock.run(() => this.v3.getOpenOrders(symbol));
-        const isStillOpen = openOrders.some((o: any) => o.orderId === orderId);
+        const isStillOpen = openOrders.some((o: OpenOrder) => o.orderId === orderId);
 
         if (isStillOpen) {
           this.persist({ type: "info", message: `LIMIT order timed out, falling back to MARKET` });
-          await this.withOrderRetry(`Cancel stale LIMIT ${symbol}`, () => SignedRequestLock.run(() => this.v3.cancelOrder(symbol, orderId)));
+          await this.withOrderRetry(`Cancel stale LIMIT ${symbol}`, () => SignedRequestLock.run(() => this.v3.cancelOrder(symbol, String(orderId))));
           // Fall through to MARKET
         } else {
           this.persist({ type: "info", message: `LIMIT order FILLED on ${symbol}` });
@@ -298,10 +335,19 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
       console.error(`[LiveExecutor] Failed to enter ${side} on ${symbol}`, error);
       throw error;
     }
+    } finally {
+      this.inFlightOrderKeys.delete(inFlightKey);
+    }
   }
 
   async closePosition(symbolArg: string, reason: string, meta?: Record<string, unknown>): Promise<void> {
     const symbol = this.normalizeSymbol(symbolArg);
+    const inFlightKey = `close:${symbol}`;
+    if (this.inFlightOrderKeys.has(inFlightKey)) {
+      this.persist({ type: "info", message: `Duplicate close skipped; ${symbol} close order is already in flight`, payload: { reason } });
+      return;
+    }
+    this.inFlightOrderKeys.add(inFlightKey);
     try {
       const position = await this.getCurrentPosition(symbol);
       const positionAmt = this.parsePositionAmount(position);
@@ -345,23 +391,12 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
         if (!refreshed || refreshedAmt === 0) {
           this.persist({ type: "info", message: `Close treated as complete; ${symbol} is already flat after reduceOnly rejection`, payload: { reason, error: msg } });
         } else {
-          const refreshedSide: "BUY" | "SELL" = refreshedAmt > 0 ? "SELL" : "BUY";
-          const refreshedQuantityValue = meta?.size ? Math.min(Math.abs(Number(meta.size)), Math.abs(refreshedAmt)) : Math.abs(refreshedAmt);
-          if (!Number.isFinite(refreshedQuantityValue) || refreshedQuantityValue <= 0) {
-            this.persist({ type: "info", message: `Close treated as complete; ${symbol} fallback quantity is zero`, payload: { reason, error: msg, refreshedAmt } });
-            return;
-          }
-          const refreshedQuantity = refreshedQuantityValue.toString();
-          this.persist({ type: "info", message: `Retrying ${symbol} close without reduceOnly after -2022`, payload: { reason, side: refreshedSide, quantity: refreshedQuantity } });
-          await this.withOrderRetry(`MARKET close ${symbol} without reduceOnly`, () =>
-            SignedRequestLock.run(async () =>
-              this.v3.newOrder({
-                ...closeOrder,
-                side: refreshedSide,
-                quantity: refreshedQuantity,
-              }),
-            )
-          );
+          this.persist({
+            type: "info",
+            message: `Close failed safe; ${symbol} reduceOnly was rejected and position is still open`,
+            payload: { reason, error: msg, refreshedAmt },
+          });
+          throw new Error(`Reduce-only close rejected for ${symbol}; refusing non-reduceOnly fallback`);
         }
       }
 
@@ -369,6 +404,8 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
     } catch (error) {
       console.error(`[LiveExecutor] Failed to close position on ${symbol}: ${reason}`, error);
       throw error;
+    } finally {
+      this.inFlightOrderKeys.delete(inFlightKey);
     }
   }
 
@@ -399,10 +436,10 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
     }
   }
 
-  private async getCurrentPosition(symbol: string): Promise<{ positionAmt: string; symbol: string; entryPrice?: string } | null> {
+  private async getCurrentPosition(symbol: string): Promise<LivePosition | null> {
     try {
       const account = await SignedRequestLock.run(async () => this.v3.getAccount());
-      const position = account.positions?.find((p: any) => p.symbol === symbol);
+      const position = account.positions?.find((p) => p.symbol === symbol);
       if (position && this.parsePositionAmount(position) !== 0) return position;
       return null;
     } catch {
