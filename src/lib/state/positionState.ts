@@ -68,27 +68,42 @@ export class PositionStateManager {
       unrealizedPnl: currentState.unrealizedPnl,
     };
 
+    const now = Date.now();
     const reconciled = this.reconcile(restStateNormalized, localStateNormalized);
+    const GRACE_PERIOD_MS = 10_000; // 10 seconds
+    const isDust = restStateNormalized.size > 0 && restStateNormalized.size < 0.001; // Tiny residual
 
-    if (reconciled) {
+    if (reconciled || isDust) {
+      if (isDust && restStateNormalized.side !== "flat") {
+        console.log(`[PositionState] ${symbol} ignoring dust position from REST: ${restStateNormalized.size}`);
+        restStateNormalized.size = 0;
+        restStateNormalized.side = "flat";
+        restStateNormalized.avgEntry = 0;
+      }
       this.reconciliationFailures.set(symbol, 0);
       this.states.set(symbol, {
         ...currentState,
         ...restStateNormalized,
-        lastUpdate: Date.now(),
+        lastUpdate: reconciled ? now : currentState.lastUpdate,
       });
       return true;
     }
 
-    // Trust REST if local is flat but REST has a position, or vice versa
-    if ((restStateNormalized.side === "flat" && localStateNormalized.side !== "flat") ||
-        (restStateNormalized.side !== "flat" && localStateNormalized.side === "flat")) {
+    // Trust REST if local is flat but REST has a position, or vice versa.
+    // ADDED: Grace period to prevent stale REST data from overwriting a recent local close.
+    if (restStateNormalized.side !== localStateNormalized.side) {
+      const timeSinceUpdate = now - currentState.lastUpdate;
+      if (localStateNormalized.side === "flat" && timeSinceUpdate < GRACE_PERIOD_MS) {
+        console.log(`[PositionState] ${symbol} ignoring potential stale REST position during grace period (${timeSinceUpdate}ms)`);
+        return false;
+      }
+
       console.log(`[PositionState] ${symbol} REST/Local mismatch (${restStateNormalized.side} vs ${localStateNormalized.side}), trusting REST`);
       this.reconciliationFailures.set(symbol, 0);
       this.states.set(symbol, {
         ...currentState,
         ...restStateNormalized,
-        lastUpdate: Date.now(),
+        lastUpdate: now,
       });
       return true;
     }

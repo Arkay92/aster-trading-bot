@@ -142,6 +142,17 @@ export type RiskConfig = {
   maxDailyLossUsdt?: number; // Hard stop once realized daily loss exceeds this
   maxConsecutiveLosses?: number; // Hard stop after N losing closes in a row
   minTradeIntervalMs?: number; // Per-symbol minimum time between new entries
+  useMarketRegimeFilter?: boolean;
+  regimeAdxThreshold?: number;
+  requireStructureBreak?: boolean;
+  structureLookbackBars?: number;
+  requireVolumeSpike?: boolean;
+  volumeSpikeMultiplier?: number;
+  atrLength?: number;
+  atrStopMultiplier?: number;
+  atrTakeProfitR?: number;
+  moveStopToBreakevenR?: number;
+  riskPerTradePct?: number;
 };
 
 export type StrategyType =
@@ -188,7 +199,7 @@ export type PositionState = {
   symbol?: string;
   entryPrice?: number;
   openedAt?: number;
-  strategy?: StrategyType;
+  strategy?: StrategyType | "external";
 };
 
 export type TradeInstruction = {
@@ -206,4 +217,21 @@ export type ExecutionAdapter = {
   enterShort(order: TradeInstruction): Promise<void>;
   closePosition(symbol: string, reason: string, meta?: Record<string, unknown>): Promise<void>;
 };
+export interface Indicator {
+  update(value: number, ...args: number[]): number | null;
+  readonly value: number | null;
+  readonly isReady: boolean;
+}
 
+export interface StrategyEngine {
+  update(bar: SyntheticBar): StrategySignal;
+  getIndicatorValues(): Record<string, unknown>;
+  readonly settings: any;
+  checkExitConditions?(bar: SyntheticBar): {
+    shouldExit: boolean;
+    reason: string;
+    details?: Record<string, unknown>;
+  };
+  shouldAllowTrading?(adxThreshold?: number): boolean;
+  onPositionChange?(side: PositionSide): void;
+}

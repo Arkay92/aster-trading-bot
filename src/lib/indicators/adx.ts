@@ -1,4 +1,6 @@
-export class ADX {
+import type { Indicator } from "../types";
+
+export class ADX implements Indicator {
   private readonly length: number;
   private trValues: number[] = [];
   private plusDMValues: number[] = [];

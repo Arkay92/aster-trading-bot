@@ -1,4 +1,6 @@
-export class EMA {
+import type { Indicator } from "../types";
+
+export class EMA implements Indicator {
   private readonly smoothing: number;
   private readonly length: number;
   private initialized = false;

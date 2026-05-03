@@ -1,169 +1,19 @@
 {
   "positions": {
-    "BTCUSDT": {
-      "size": 0.001,
-      "side": "long",
-      "symbol": "BTCUSDT",
-      "avgEntry": 78420.2,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777749106880
-    },
-    "ETHUSDT": {
-      "size": 0.007,
-      "side": "long",
-      "symbol": "ETHUSDT",
-      "avgEntry": 2308.78,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777749106880
-    },
-    "SOLUSDT": {
-      "size": 0.36,
-      "side": "long",
-      "symbol": "SOLUSDT",
-      "avgEntry": 84.18,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777749106880
-    },
-    "HYPEUSDT": {
-      "size": 0,
-      "side": "flat",
-      "symbol": "HYPEUSDT",
-      "avgEntry": 0,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777749106880
-    },
-    "BNBUSDT": {
-      "size": 0.02,
-      "side": "long",
-      "symbol": "BNBUSDT",
-      "avgEntry": 618.94,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777749106880
-    },
-    "JASMYUSDT": {
-      "size": 0,
-      "side": "flat",
-      "symbol": "JASMYUSDT",
-      "avgEntry": 0,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777749106880
-    },
-    "APEUSDT": {
-      "size": 0,
-      "side": "flat",
-      "symbol": "APEUSDT",
-      "avgEntry": 0,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777749106880
-    },
-    "GENIUSUSDT": {
-      "size": 0,
-      "side": "flat",
-      "symbol": "GENIUSUSDT",
-      "avgEntry": 0,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777749106880
-    },
-    "XRPUSDT": {
-      "size": 18,
-      "side": "long",
-      "symbol": "XRPUSDT",
-      "avgEntry": 1.3932,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777749106880
-    },
     "BTCUSDT-PERP": {
-      "size": 0.0002,
-      "side": "long",
+      "size": 0,
+      "side": "flat",
       "symbol": "BTCUSDT-PERP",
-      "avgEntry": 78420.1,
+      "avgEntry": 0,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777749034317,
+      "lastUpdate": 1777800678380,
       "pendingOrder": {
         "side": "long",
-        "size": 0.0002,
-        "timestamp": 1777749019252
-      }
-    },
-    "ETHUSDT-PERP": {
-      "size": 0.0065,
-      "side": "long",
-      "symbol": "ETHUSDT-PERP",
-      "avgEntry": 2308.43,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777749001998,
-      "pendingOrder": {
-        "side": "long",
-        "size": 0.0065,
-        "timestamp": 1777748986710
-      }
-    },
-    "HYPEUSDT-PERP": {
-      "size": 0.3596,
-      "side": "long",
-      "symbol": "HYPEUSDT-PERP",
-      "avgEntry": 41.717,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777748967503,
-      "pendingOrder": {
-        "side": "long",
-        "size": 0.3596,
-        "timestamp": 1777748956165
-      }
-    },
-    "BNBUSDT-PERP": {
-      "size": 0.0242,
-      "side": "long",
-      "symbol": "BNBUSDT-PERP",
-      "avgEntry": 618.92,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777748995175,
-      "pendingOrder": {
-        "side": "long",
-        "size": 0.0242,
-        "timestamp": 1777748988070
-      }
-    },
-    "SOLUSDT-PERP": {
-      "size": 0.1782,
-      "side": "long",
-      "symbol": "SOLUSDT-PERP",
-      "avgEntry": 84.18,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777748997710,
-      "pendingOrder": {
-        "side": "long",
-        "size": 0.1782,
-        "timestamp": 1777748988701
-      }
-    },
-    "XRPUSDT-PERP": {
-      "size": 10.765,
-      "side": "long",
-      "symbol": "XRPUSDT-PERP",
-      "avgEntry": 1.3934,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777749026744,
-      "pendingOrder": {
-        "side": "long",
-        "size": 10.765,
-        "timestamp": 1777749018860
-      }
-    },
-    "GENIUSUSDT-PERP": {
-      "size": 28.1057,
-      "side": "long",
-      "symbol": "GENIUSUSDT-PERP",
-      "avgEntry": 0.5337,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777749109041,
-      "pendingOrder": {
-        "side": "long",
-        "size": 28.1057,
-        "timestamp": 1777749061400
+        "size": 4.9505,
+        "timestamp": 1777800679246
       }
     }
   },
-  "lastBarCloseTime": 1777749084617,
-  "timestamp": 1777749109044
+  "lastBarCloseTime": 1777800693546,
+  "timestamp": 1777800678380
 }

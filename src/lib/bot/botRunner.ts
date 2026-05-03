@@ -1,15 +1,19 @@
 import { EventEmitter } from "events";
-import { WatermellonEngine } from "../watermellonEngine";
-import { PeachHybridEngine } from "../peachHybridEngine";
-import { SwingEngine } from "../swingEngine";
-import { EmaCrossEngine } from "../emaCrossEngine";
-import { RsiReversionEngine } from "../rsiReversionEngine";
+import { 
+  WatermellonEngine, 
+  PeachHybridEngine, 
+  SwingEngine, 
+  EmaCrossEngine, 
+  RsiReversionEngine 
+} from "../engines";
 import { VirtualBarBuilder } from "../virtualBarBuilder";
 import { RestPoller } from "../rest/restPoller";
 import { PositionStateManager } from "../state/positionState";
 import { OrderTracker } from "../execution/orderTracker";
 import { StatePersistence } from "../state/statePersistence";
 import { KeyManager } from "../security/keyManager";
+import { ADX } from "../indicators/adx";
+import { ATR } from "../indicators/atr";
 import type {
   AppConfig,
   EmaCrossConfig,
@@ -19,6 +23,7 @@ import type {
   StrategyType,
   SwingConfig,
   PositionState,
+  StrategyEngine,
   StrategySignal,
   SyntheticBar,
   TradeInstruction,
@@ -39,137 +44,13 @@ type TickStream = {
   on: <K extends "tick" | "error" | "close">(event: K, handler: (...args: unknown[]) => void) => () => void;
 };
 
-type Engine = WatermellonEngine | PeachHybridEngine | SwingEngine | EmaCrossEngine | RsiReversionEngine;
+type Engine = StrategyEngine;
+type MarketRegime = "trending" | "ranging" | "unknown";
+type SignalCandidate = { strategyType: StrategyType; signal: NonNullable<StrategySignal> };
 
 const HOUR_MS = 60 * 60 * 1000;
 
-type TradeRecord = {
-  id: string;
-  symbol: string;
-  side: "long" | "short";
-  entryPrice: number;
-  exitPrice: number;
-  entryTime: number;
-  exitTime: number;
-  size: number;
-  pnl: number;
-  pnlPercent: number;
-  reason: string;
-  leverage: number;
-};
-
-class TradeStatistics {
-  private trades: TradeRecord[] = [];
-  private currentTrades = new Map<string, Partial<TradeRecord>>();
-
-  startTrade(symbol: string, side: "long" | "short", entryPrice: number, size: number, leverage: number): void {
-    this.currentTrades.set(symbol, {
-      id: `trade-${Date.now()}-${symbol}`,
-      symbol,
-      side,
-      entryPrice,
-      entryTime: Date.now(),
-      size,
-      leverage,
-    });
-  }
-
-  closeTrade(symbol: string, exitPrice: number, reason: string): void {
-    const currentTrade = this.currentTrades.get(symbol);
-    if (!currentTrade) return;
-
-    const trade: TradeRecord = {
-      ...currentTrade,
-      exitPrice,
-      exitTime: Date.now(),
-      pnl: this.calculatePnL(currentTrade as TradeRecord, exitPrice),
-      pnlPercent: this.calculatePnLPercent(currentTrade as TradeRecord, exitPrice),
-      reason,
-    } as TradeRecord;
-
-    this.trades.push(trade);
-    this.currentTrades.delete(symbol);
-  }
-
-  private calculatePnL(trade: TradeRecord, exitPrice: number): number {
-    const priceDiff = trade.side === "long" ? exitPrice - trade.entryPrice : trade.entryPrice - exitPrice;
-    return priceDiff * trade.size;
-  }
-
-  private calculatePnLPercent(trade: TradeRecord, exitPrice: number): number {
-    const priceDiff = trade.side === "long" ? exitPrice - trade.entryPrice : trade.entryPrice - exitPrice;
-    return (priceDiff / trade.entryPrice) * 100 * trade.leverage;
-  }
-
-  getStats(): {
-    totalTrades: number;
-    winningTrades: number;
-    losingTrades: number;
-    winRate: number;
-    totalPnL: number;
-    avgWin: number;
-    avgLoss: number;
-    profitFactor: number;
-    maxDrawdown: number;
-    largestWin: number;
-    largestLoss: number;
-  } {
-    if (this.trades.length === 0) {
-      return {
-        totalTrades: 0,
-        winningTrades: 0,
-        losingTrades: 0,
-        winRate: 0,
-        totalPnL: 0,
-        avgWin: 0,
-        avgLoss: 0,
-        profitFactor: 0,
-        maxDrawdown: 0,
-        largestWin: 0,
-        largestLoss: 0,
-      };
-    }
-
-    const winningTrades = this.trades.filter(t => t.pnl > 0);
-    const losingTrades = this.trades.filter(t => t.pnl < 0);
-
-    const totalPnL = this.trades.reduce((sum, t) => sum + t.pnl, 0);
-    const avgWin = winningTrades.length > 0 ? winningTrades.reduce((sum, t) => sum + t.pnl, 0) / winningTrades.length : 0;
-    const avgLoss = losingTrades.length > 0 ? Math.abs(losingTrades.reduce((sum, t) => sum + t.pnl, 0) / losingTrades.length) : 0;
-
-    let peak = 0;
-    let maxDrawdown = 0;
-    let runningPnL = 0;
-
-    for (const trade of this.trades) {
-      runningPnL += trade.pnl;
-      if (runningPnL > peak) peak = runningPnL;
-      const drawdown = peak - runningPnL;
-      if (drawdown > maxDrawdown) maxDrawdown = drawdown;
-    }
-
-    const largestWin = winningTrades.length > 0 ? Math.max(...winningTrades.map(t => t.pnl)) : 0;
-    const largestLoss = losingTrades.length > 0 ? Math.min(...losingTrades.map(t => t.pnl)) : 0;
-
-    return {
-      totalTrades: this.trades.length,
-      winningTrades: winningTrades.length,
-      losingTrades: losingTrades.length,
-      winRate: (winningTrades.length / this.trades.length) * 100,
-      totalPnL,
-      avgWin,
-      avgLoss,
-      profitFactor: avgLoss > 0 ? (avgWin * winningTrades.length) / (avgLoss * losingTrades.length) : avgWin > 0 ? Infinity : 0,
-      maxDrawdown,
-      largestWin,
-      largestLoss,
-    };
-  }
-
-  getRecentTrades(limit = 10): TradeRecord[] {
-    return this.trades.slice(-limit);
-  }
-}
+import { TradeStatistics } from "./tradeStatistics";
 
 export class BotRunner {
   private readonly emitter = new EventEmitter();
@@ -183,8 +64,6 @@ export class BotRunner {
   private positions = new Map<string, PositionState>();
   private flipHistory: number[] = [];
   private unsubscribers: Array<() => void> = [];
-  private tradingFrozen = false;
-  private freezeUntil = 0;
   private processedSignals = new Set<string>();
   private symbolActionLocks = new Set<string>();
   private lastBarCloseTimes = new Map<string, number>();
@@ -199,6 +78,12 @@ export class BotRunner {
   private consecutiveLosses = 0;
   private riskHalted = false;
   private riskDayKey = "";
+  private lastRiskProcessedTradeId = "";
+  private initialBalanceFetched = false;
+  private recentBars = new Map<string, SyntheticBar[]>();
+  private adxBySymbol = new Map<string, ADX>();
+  private atrBySymbol = new Map<string, ATR>();
+  private dynamicStopBySymbol = new Map<string, number>();
 
   constructor(
     private readonly config: AppConfig,
@@ -214,6 +99,9 @@ export class BotRunner {
     for (const rawSymbol of config.credentials.pairSymbols) {
       const symbol = this.toPerpSymbol(rawSymbol);
       this.barBuilders.set(symbol, new VirtualBarBuilder(timeframeMs));
+      this.recentBars.set(symbol, []);
+      this.adxBySymbol.set(symbol, new ADX(this.config.risk.atrLength ?? 14));
+      this.atrBySymbol.set(symbol, new ATR(this.config.risk.atrLength ?? 14));
       const enginesByStrategy = new Map<StrategyType, Engine>();
       for (const strategyType of this.strategyTypes) {
         const strategyConfig = this.getStrategyConfig(strategyType);
@@ -290,7 +178,10 @@ export class BotRunner {
     }
     
     this.log("Waiting for initial balance fetch...");
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const waitUntil = Date.now() + 15_000;
+    while (!this.initialBalanceFetched && Date.now() < waitUntil) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
     this.resetDailyRiskWindow();
     
     this.log("Bot started with USDT balance", {
@@ -345,12 +236,10 @@ export class BotRunner {
       const unrealized = parseFloat(position.unRealizedProfit || "0") || 0;
 
       const existing = this.positions.get(symbol);
-      this.stateManager.updateLocalState(symbol, {
-        side,
-        size: absSize,
-        symbol,
-        avgEntry,
-        unrealizedPnl: unrealized,
+      this.stateManager.updateFromRest(symbol, {
+        positionAmt: position.positionAmt,
+        entryPrice: position.entryPrice || "0",
+        unrealizedProfit: position.unRealizedProfit || "0",
       });
       this.syncPositionFromState(symbol);
       if (side !== "flat" && existing?.strategy) {
@@ -358,6 +247,12 @@ export class BotRunner {
           ...(this.positions.get(symbol) || { side: "flat", size: 0, symbol }),
           strategy: existing.strategy,
           openedAt: existing.openedAt,
+        });
+      } else if (side !== "flat" && !existing?.strategy) {
+        this.positions.set(symbol, {
+          ...(this.positions.get(symbol) || { side: "flat", size: 0, symbol }),
+          strategy: "external",
+          openedAt: Date.now(),
         });
       }
 
@@ -381,6 +276,7 @@ export class BotRunner {
           this.lastBalanceLog = now;
         }
         this.usdtBalance = newBalance;
+        this.initialBalanceFetched = true;
         this.ensureDailyRiskWindow();
       }
     });
@@ -392,20 +288,7 @@ export class BotRunner {
     this.restPoller.start(2000);
   }
 
-  private freezeTrading(durationMs: number, symbol?: string): void {
-    this.tradingFrozen = true;
-    this.freezeUntil = Date.now() + durationMs;
-    this.log(`Trading frozen ${symbol ? `for ${symbol}` : ''}`, { durationMs, freezeUntil: this.freezeUntil });
-    setTimeout(() => {
-      this.tradingFrozen = false;
-      if (symbol) {
-        this.stateManager.resetReconciliationFailures(symbol);
-      } else {
-        this.config.credentials.pairSymbols.forEach(s => this.stateManager.resetReconciliationFailures(s));
-      }
-      this.log("Trading unfrozen");
-    }, durationMs);
-  }
+
 
   on<K extends keyof BotRunnerEvents>(event: K, handler: BotRunnerEvents[K]): () => void {
     this.emitter.on(event, handler);
@@ -442,6 +325,9 @@ export class BotRunner {
   private async handleBarClose(symbol: string, bar: SyntheticBar) {
     this.ensureDailyRiskWindow();
     if (this.riskHalted) return;
+    this.pushRecentBar(symbol, bar);
+    this.adxBySymbol.get(symbol)?.update(bar.high, bar.low, bar.close);
+    this.atrBySymbol.get(symbol)?.update(bar.high, bar.low, bar.close);
     const engines = this.engines.get(symbol);
     if (!engines) return;
 
@@ -449,89 +335,70 @@ export class BotRunner {
     if (bar.endTime <= lastTime) return;
     this.lastBarCloseTimes.set(symbol, bar.endTime);
 
-    if (this.tradingFrozen && Date.now() < this.freezeUntil) return;
+
 
     const position = this.positions.get(symbol) || { side: "flat", size: 0, symbol };
+    const candidates: SignalCandidate[] = [];
 
     for (const strategyType of this.strategyTypes) {
       const engine = engines.get(strategyType);
       if (!engine) continue;
 
-      if (position.side !== "flat" && strategyType === "peach-hybrid" && position.strategy === "peach-hybrid") {
-        const exitSignal = (engine as PeachHybridEngine).checkExitConditions(bar);
+      // Check for custom exit conditions
+      if (position.side !== "flat" && position.strategy === strategyType && engine.checkExitConditions) {
+        const exitSignal = engine.checkExitConditions(bar);
         if (exitSignal.shouldExit) {
-          this.log(`Peach exit condition triggered on ${symbol}`, { reason: exitSignal.reason });
+          this.log(`${strategyType} exit condition triggered on ${symbol}`, { reason: exitSignal.reason });
           await this.closePosition(symbol, exitSignal.reason, exitSignal.details);
           return;
         }
       }
 
-      let signal: StrategySignal;
-      if (strategyType === "peach-hybrid") {
-        signal = (engine as PeachHybridEngine).update(bar);
-      } else if (strategyType === "swing") {
-        signal = (engine as SwingEngine).update(bar.close);
-      } else if (strategyType === "ema-cross") {
-        signal = (engine as EmaCrossEngine).update(bar.close);
-      } else if (strategyType === "rsi-reversion") {
-        signal = (engine as RsiReversionEngine).update(bar.close);
-      } else {
-        signal = (engine as WatermellonEngine).update(bar.close);
-      }
+      const signal = engine.update(bar);
       
       if ((bar.endTime / 1000) % 10 === 0) {
         this.logIndicators(symbol, strategyType, engine, bar);
       }
       
       if (!signal) continue;
-
-      const signalKey = `${symbol}-${strategyType}-${signal.type}-${bar.endTime}`;
-      if (this.processedSignals.has(signalKey)) continue;
-      this.processedSignals.add(signalKey);
-      if (this.processedSignals.size > 500) {
-        this.processedSignals.delete(this.processedSignals.values().next().value!);
-      }
-
-      this.emitter.emit("signal", signal, bar);
-      if (!this.config.risk.quietSignalLogs) {
-        this.log(`Signal emitted on ${symbol}`, {
-          strategy: strategyType,
-          type: signal.type,
-          reason: signal.reason,
-          close: bar.close,
-        });
-      }
-      await this.applySignal(symbol, strategyType, signal, bar);
+      candidates.push({ strategyType, signal });
     }
+
+    const selected = this.pickBestSignal(symbol, candidates, position);
+    if (!selected) return;
+
+    const signalKey = `${symbol}-${selected.strategyType}-${selected.signal.type}-${bar.endTime}`;
+    if (this.processedSignals.has(signalKey)) return;
+    this.processedSignals.add(signalKey);
+    if (this.processedSignals.size > 500) {
+      this.processedSignals.delete(this.processedSignals.values().next().value!);
+    }
+
+    this.emitter.emit("signal", selected.signal, bar);
+    if (!this.config.risk.quietSignalLogs) {
+      this.log(`Signal emitted on ${symbol}`, {
+        strategy: selected.strategyType,
+        type: selected.signal.type,
+        reason: selected.signal.reason,
+        close: bar.close,
+        regime: this.getMarketRegime(symbol),
+        confirmations: candidates.filter((c) => c.signal.type === selected.signal.type).length,
+      });
+    }
+    await this.applySignal(symbol, selected.strategyType, selected.signal, bar);
   }
 
   private logIndicators(symbol: string, strategyType: StrategyType, engine: Engine, bar: SyntheticBar) {
-    if (strategyType === "peach-hybrid") {
-      const indicators = (engine as PeachHybridEngine).getIndicatorValues();
-      this.log(`Peach indicators updated on ${symbol}`, {
-        price: bar.close.toFixed(4),
-        v1: { rsi: indicators.v1.rsi?.toFixed(2) },
-        v2: { rsi: indicators.v2.rsi?.toFixed(2) },
-        adx: indicators.adx?.toFixed(2),
-      });
-    } else if (strategyType === "swing") {
-      const indicators = (engine as SwingEngine).getIndicatorValues();
-      this.log(`Swing indicators updated on ${symbol}`, {
-        price: bar.close.toFixed(4),
-        emaTrend: indicators.emaTrend?.toFixed(2),
-        rsi: indicators.rsi?.toFixed(2),
-      });
-    } else if (strategyType === "ema-cross") {
-      this.log(`EMA Cross active on ${symbol}`, { price: bar.close.toFixed(4) });
-    } else if (strategyType === "rsi-reversion") {
-      this.log(`RSI Reversion active on ${symbol}`, { price: bar.close.toFixed(4) });
-    } else {
-      const indicators = (engine as WatermellonEngine).getIndicatorValues();
-      this.log(`Watermellon indicators updated on ${symbol}`, {
-        price: bar.close.toFixed(4),
-        rsi: indicators.rsi?.toFixed(2),
-      });
+    const indicators = engine.getIndicatorValues();
+    const formatted: Record<string, string> = {};
+    for (const [key, val] of Object.entries(indicators)) {
+      if (typeof val === "number") formatted[key] = val.toFixed(2);
+      else formatted[key] = String(val);
     }
+    this.log(`${strategyType} indicators updated on ${symbol}`, {
+      price: bar.close.toFixed(4),
+      ...formatted,
+    });
   }
 
   private async applySignal(symbol: string, strategyType: StrategyType, signal: StrategySignal, bar: SyntheticBar) {
@@ -543,16 +410,24 @@ export class BotRunner {
       const minTradeIntervalMs = this.config.risk.minTradeIntervalMs ?? 15_000;
       const lastEntryTs = this.lastEntryAt.get(symbol) || 0;
       if (now - lastEntryTs < minTradeIntervalMs) return;
+      if (!this.isStrategyAllowedForRegime(symbol, strategyType)) return;
+      if (!this.passesEntryConfluence(symbol, signal, bar)) return;
 
-      if (strategyType === "peach-hybrid") {
-        const engine = this.engines.get(symbol)?.get("peach-hybrid") as PeachHybridEngine | undefined;
-        if (!engine) return;
-        if (this.config.risk.requireTrendingMarket && !engine.shouldAllowTrading(this.config.risk.adxThreshold)) {
-          return;
-        }
+      const engine = this.engines.get(symbol)?.get(strategyType);
+      if (engine && this.config.risk.requireTrendingMarket && engine.shouldAllowTrading) {
+        if (!engine.shouldAllowTrading(this.config.risk.adxThreshold)) return;
       }
 
       const position = this.positions.get(symbol) || { side: "flat", size: 0, symbol };
+      if (position.side !== "flat" && position.strategy === "external") {
+        if (!this.config.risk.quietSignalLogs) {
+          this.log(`Skipping signal on ${symbol}; position is externally owned`, {
+            side: position.side,
+            size: position.size,
+          });
+        }
+        return;
+      }
       const activeCount = this.getActiveStrategyPositionCount(strategyType);
       const globalActiveCount = this.getGlobalActivePositionCount();
       const maxPos = this.config.risk.perStrategyMaxPositions?.[strategyType] ?? this.config.risk.maxPositions ?? 1;
@@ -561,8 +436,7 @@ export class BotRunner {
       const { maxPositionSize, maxLeverage, positionSizePct } = this.config.risk;
       let notionalUsdt = positionSizePct ? (this.usdtBalance * (positionSizePct / 100) * 0.7 * maxLeverage) : maxPositionSize;
       notionalUsdt = Math.min(notionalUsdt, maxPositionSize);
-      
-      const size = Number((notionalUsdt / bar.close).toFixed(4));
+      const size = this.computePositionSize(symbol, bar.close, notionalUsdt);
       if (size <= 0) return;
 
       const order = { symbol, size, leverage: maxLeverage, price: bar.close, signalReason: signal.reason, timestamp: bar.endTime, side: signal.type };
@@ -660,12 +534,11 @@ export class BotRunner {
     this.positions.set(symbol, pos);
     this.highestPrices.set(symbol, order.price);
     this.lowestPrices.set(symbol, order.price);
+    this.dynamicStopBySymbol.delete(symbol);
     this.stateManager.updateLocalState(symbol, { side, size: order.size, symbol, avgEntry: order.price });
 
-    if (strategyType === "peach-hybrid") {
-      const peach = this.engines.get(symbol)?.get("peach-hybrid") as PeachHybridEngine | undefined;
-      peach?.setPosition(side);
-    }
+    const engine = this.engines.get(symbol)?.get(strategyType);
+    engine?.onPositionChange?.(side);
     this.tradeStats.startTrade(symbol, side, order.price, order.size, order.leverage);
     this.lastEntryAt.set(symbol, Date.now());
     this.recordFlip(order.timestamp);
@@ -682,13 +555,12 @@ export class BotRunner {
     this.tradeStats.closeTrade(symbol, exitPrice, reason);
     this.updateRiskFromLastTrade();
 
-    if (position.strategy === "peach-hybrid") {
-      const peach = this.engines.get(symbol)?.get("peach-hybrid") as PeachHybridEngine | undefined;
-      peach?.setPosition("flat");
-    }
+    const engine = this.engines.get(symbol)?.get(position.strategy as StrategyType);
+    engine?.onPositionChange?.("flat");
     this.logTradeStats();
     this.highestPrices.delete(symbol);
     this.lowestPrices.delete(symbol);
+    this.dynamicStopBySymbol.delete(symbol);
     this.positions.set(symbol, { side: "flat", size: 0, symbol });
     this.stateManager.updateLocalState(symbol, { side: "flat", size: 0, symbol, avgEntry: 0 });
 
@@ -726,6 +598,40 @@ export class BotRunner {
     } else {
       const lowest = this.lowestPrices.get(symbol) || close;
       if (close < lowest) this.lowestPrices.set(symbol, close);
+    }
+
+    const atr = this.atrBySymbol.get(symbol)?.value ?? null;
+    const atrStopMult = this.config.risk.atrStopMultiplier ?? 1.5;
+    const takeProfitR = this.config.risk.atrTakeProfitR ?? 2;
+    const breakevenR = this.config.risk.moveStopToBreakevenR ?? 1;
+    if (atr && atr > 0) {
+      let stop = this.dynamicStopBySymbol.get(symbol);
+      if (stop === undefined) {
+        stop = position.side === "long" ? position.entryPrice - atr * atrStopMult : position.entryPrice + atr * atrStopMult;
+        this.dynamicStopBySymbol.set(symbol, stop);
+      }
+      const unrealizedR =
+        position.side === "long"
+          ? (close - position.entryPrice) / (atr * atrStopMult)
+          : (position.entryPrice - close) / (atr * atrStopMult);
+      if (unrealizedR >= breakevenR) {
+        this.dynamicStopBySymbol.set(symbol, position.entryPrice);
+        stop = position.entryPrice;
+      }
+
+      if ((position.side === "long" && close <= stop) || (position.side === "short" && close >= stop)) {
+        await this.closePosition(symbol, "atr-stop", { close, stop, atr });
+        return;
+      }
+
+      const target =
+        position.side === "long"
+          ? position.entryPrice + atr * atrStopMult * takeProfitR
+          : position.entryPrice - atr * atrStopMult * takeProfitR;
+      if ((position.side === "long" && close >= target) || (position.side === "short" && close <= target)) {
+        await this.closePosition(symbol, "atr-take-profit", { close, target, atr });
+        return;
+      }
     }
 
     if (position.strategy === "peach-hybrid") {
@@ -859,6 +765,8 @@ export class BotRunner {
   private updateRiskFromLastTrade(): void {
     const lastTrade = this.tradeStats.getRecentTrades(1)[0];
     if (!lastTrade) return;
+    if (lastTrade.id === this.lastRiskProcessedTradeId) return;
+    this.lastRiskProcessedTradeId = lastTrade.id;
     this.dailyRealizedPnl += lastTrade.pnl;
     if (this.dailyRealizedPnl > this.dailyPeakPnl) this.dailyPeakPnl = this.dailyRealizedPnl;
     if (lastTrade.pnl < 0) this.consecutiveLosses += 1;
@@ -884,5 +792,107 @@ export class BotRunner {
         threshold: maxConsecutiveLosses,
       });
     }
+  }
+
+  private pushRecentBar(symbol: string, bar: SyntheticBar): void {
+    const list = this.recentBars.get(symbol) || [];
+    list.push(bar);
+    const keep = Math.max(this.config.risk.structureLookbackBars ?? 5, 20);
+    while (list.length > keep) list.shift();
+    this.recentBars.set(symbol, list);
+  }
+
+  private getMarketRegime(symbol: string): MarketRegime {
+    const adx = this.adxBySymbol.get(symbol)?.value;
+    if (adx === null || adx === undefined) return "unknown";
+    return adx >= (this.config.risk.regimeAdxThreshold ?? 25) ? "trending" : "ranging";
+  }
+
+  private isStrategyAllowedForRegime(symbol: string, strategyType: StrategyType): boolean {
+    if (!this.config.risk.useMarketRegimeFilter) return true;
+    const regime = this.getMarketRegime(symbol);
+    if (regime === "unknown") return true;
+    const momentum = new Set<StrategyType>(["watermellon", "peach-hybrid", "ema-cross", "swing"]);
+    const meanReversion = new Set<StrategyType>(["rsi-reversion"]);
+    if (regime === "trending") return momentum.has(strategyType);
+    return meanReversion.has(strategyType);
+  }
+
+  private passesEntryConfluence(symbol: string, signal: StrategySignal, bar: SyntheticBar): boolean {
+    if (!signal) return false;
+    const bars = this.recentBars.get(symbol) || [];
+    const lookback = this.config.risk.structureLookbackBars ?? 5;
+    if (this.config.risk.requireStructureBreak && bars.length >= lookback + 1) {
+      const prev = bars.slice(-lookback - 1, -1);
+      const maxHigh = Math.max(...prev.map((b) => b.high));
+      const minLow = Math.min(...prev.map((b) => b.low));
+      if (signal.type === "long" && bar.close <= maxHigh) return false;
+      if (signal.type === "short" && bar.close >= minLow) return false;
+    }
+    if (this.config.risk.requireVolumeSpike && bars.length >= lookback + 1) {
+      const prev = bars.slice(-lookback - 1, -1);
+      const avgVol = prev.reduce((s, b) => s + b.volume, 0) / prev.length;
+      if (bar.volume < avgVol * (this.config.risk.volumeSpikeMultiplier ?? 1.3)) return false;
+    }
+    return true;
+  }
+
+  private computePositionSize(symbol: string, price: number, maxNotionalUsdt: number): number {
+    const atr = this.atrBySymbol.get(symbol)?.value;
+    const riskPct = this.config.risk.riskPerTradePct ?? 1;
+    const riskUsd = this.usdtBalance * (riskPct / 100);
+    let size = maxNotionalUsdt / price;
+    if (atr && atr > 0) {
+      const stopDistance = atr * (this.config.risk.atrStopMultiplier ?? 1.5);
+      const riskSize = riskUsd / stopDistance;
+      size = Math.min(size, riskSize);
+    }
+    return Number(size.toFixed(4));
+  }
+
+  private pickBestSignal(
+    symbol: string,
+    candidates: SignalCandidate[],
+    position: PositionState,
+  ): SignalCandidate | null {
+    if (candidates.length === 0) return null;
+    const longCount = candidates.filter((c) => c.signal.type === "long").length;
+    const shortCount = candidates.filter((c) => c.signal.type === "short").length;
+    if (longCount > 0 && shortCount > 0) return null; // conflict filter
+
+    const direction: "long" | "short" = longCount > 0 ? "long" : "short";
+    const sameDir = candidates.filter((c) => c.signal.type === direction);
+    const regime = this.getMarketRegime(symbol);
+
+    // If position already exists, only allow same-direction reinforcement from same owner strategy.
+    if (position.side !== "flat") {
+      return sameDir.find((c) => c.strategyType === position.strategy && c.signal.type === position.side) ?? null;
+    }
+
+    const momentumStrategies = new Set<StrategyType>(["watermellon", "peach-hybrid", "swing", "ema-cross"]);
+    const meanReversionStrategies = new Set<StrategyType>(["rsi-reversion"]);
+
+    if (regime === "ranging") {
+      const meanCandidates = sameDir.filter((c) => meanReversionStrategies.has(c.strategyType));
+      if (meanCandidates.length === 0) return null;
+      return meanCandidates[0] ?? null;
+    }
+
+    // trending or unknown: require confirmations unless we have a high-quality peach v2 trigger
+    const strongPeach = sameDir.find(
+      (c) => c.strategyType === "peach-hybrid" && (c.signal.reason === "v2-long" || c.signal.reason === "v2-short"),
+    );
+    const momentumCandidates = sameDir.filter((c) => momentumStrategies.has(c.strategyType));
+    if (!strongPeach && momentumCandidates.length < 2) return null;
+
+    const strategyPriority: Record<StrategyType, number> = {
+      "peach-hybrid": 5,
+      "watermellon": 4,
+      "ema-cross": 3,
+      "swing": 2,
+      "rsi-reversion": 1,
+    };
+    momentumCandidates.sort((a, b) => strategyPriority[b.strategyType] - strategyPriority[a.strategyType]);
+    return strongPeach ?? momentumCandidates[0] ?? null;
   }
 }

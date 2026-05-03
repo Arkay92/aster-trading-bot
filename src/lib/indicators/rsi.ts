@@ -1,4 +1,6 @@
-export class RSI {
+import type { Indicator } from "../types";
+
+export class RSI implements Indicator {
   private avgGain = 0;
   private avgLoss = 0;
   private prevValue: number | null = null;

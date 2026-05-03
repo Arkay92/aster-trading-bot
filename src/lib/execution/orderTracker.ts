@@ -51,11 +51,13 @@ export class OrderTracker {
     const normalizedSymbol = symbol.toUpperCase();
     // Find matching pending order
     for (const [orderId, order] of this.pendingOrders.entries()) {
+      const sizeDelta = Math.abs(order.size - size);
+      const ratioDelta = order.size > 0 ? sizeDelta / order.size : sizeDelta;
       if (
         !order.confirmed &&
         order.symbol.toUpperCase() === normalizedSymbol &&
         order.side === side &&
-        Math.abs(order.size - size) < 0.001
+        (sizeDelta < 0.001 || ratioDelta < 0.35)
       ) {
         this.confirmOrder(orderId);
         break;

@@ -3,12 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:smoke": "jest src/lib/execution/__tests__/apiSmoke.test.ts",
     "bot": "tsx src/bot/index.ts",
-    "test:bot": "tsx scripts/test/test-bot.ts",
-    "test:step": "tsx scripts/test/test-step-by-step.ts",
-    "test:live:btc": "tsx scripts/test/test-live-btc.ts",
-    "test:live:btc:v3": "tsx scripts/test/test-live-btc-v3-manual.ts",
-    "register:api-key": "tsx scripts/util/register-aster-api-key.ts"
+    "register:api-key": "tsx scripts/register-aster-api-key.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
@@ -17,8 +16,11 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/jest": "^29.5.12",
     "@types/node": "^20",
     "@types/ws": "^8.5.12",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
     "tsx": "^4.19.2",
     "typescript": "^5"
   }
