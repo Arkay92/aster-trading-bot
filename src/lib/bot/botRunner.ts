@@ -70,6 +70,7 @@ export class BotRunner {
   private unsubscribers: Array<() => void> = [];
   private processedSignals = new Set<string>();
   private symbolActionLocks = new Set<string>();
+  private symbolCloseLocks = new Set<string>();
   private pendingGlobalEntries = 0;
   private pendingStrategyEntries = new Map<StrategyType, number>();
   private pendingDirectionalEntries = new Map<"long" | "short", number>();
@@ -647,11 +648,15 @@ export class BotRunner {
   private async closePosition(symbol: string, reason: string, meta?: Record<string, unknown>) {
     const position = this.positions.get(symbol);
     if (!position || position.side === "flat") return;
+    if (this.symbolCloseLocks.has(symbol)) return;
+    this.symbolCloseLocks.add(symbol);
     try {
       await this.executor.closePosition(symbol, reason, meta);
     } catch (error) {
       this.log(`Close failed on ${symbol}`, { reason, error: String(error) });
       return;
+    } finally {
+      this.symbolCloseLocks.delete(symbol);
     }
     this.tradeStats.closeTrade(symbol, Number(meta?.price || position.entryPrice), reason);
     this.updateRiskFromLastTrade();
@@ -718,10 +723,18 @@ export class BotRunner {
       const partialTPAtR = this.config.risk.atrTakeProfitR || 1.3;
 
       if (unrealizedR >= partialTPAtR && !this.partialProfitTaken.has(symbol)) {
+        if (this.symbolCloseLocks.has(symbol)) return;
         this.log(`Partial TP (50%) on ${symbol} at ${partialTPAtR}R`);
-        await this.executor.closePosition(symbol, `partial-tp-${partialTPAtR}r`, { size: position.size * 0.5, price: close });
-        this.partialProfitTaken.add(symbol);
-        this.dynamicStopBySymbol.set(symbol, position.entryPrice); // Breakeven
+        this.symbolCloseLocks.add(symbol);
+        try {
+          await this.executor.closePosition(symbol, `partial-tp-${partialTPAtR}r`, { size: position.size * 0.5, price: close });
+          this.partialProfitTaken.add(symbol);
+          this.dynamicStopBySymbol.set(symbol, position.entryPrice); // Breakeven
+        } catch (error) {
+          this.log(`Partial close failed on ${symbol}`, { error: String(error) });
+        } finally {
+          this.symbolCloseLocks.delete(symbol);
+        }
       } else if (unrealizedR >= moveBEAtR && !this.dynamicStopBySymbol.has(symbol)) {
         this.log(`Moving SL to BE for ${symbol} at ${moveBEAtR}R`);
         this.dynamicStopBySymbol.set(symbol, position.entryPrice);

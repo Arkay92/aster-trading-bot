@@ -1,12 +1,12 @@
 {
   "positions": {
     "BTCUSDT-PERP": {
-      "size": 0.0004,
-      "side": "short",
+      "size": 0,
+      "side": "flat",
       "symbol": "BTCUSDT-PERP",
-      "avgEntry": 78752.5,
+      "avgEntry": 0,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777812578018
+      "lastUpdate": 1777814271757
     },
     "ETHUSDT-PERP": {
       "size": 0,
@@ -14,39 +14,31 @@
       "symbol": "ETHUSDT-PERP",
       "avgEntry": 0,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777812579236
+      "lastUpdate": 1777814271757
     },
     "SOLUSDT-PERP": {
-      "size": 0.3568,
-      "side": "short",
-      "symbol": "SOLUSDT-PERP",
-      "avgEntry": 84.08,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777812581414
-    },
-    "BNBUSDT-PERP": {
-      "size": 0.0485,
-      "side": "short",
-      "symbol": "BNBUSDT-PERP",
-      "avgEntry": 618.8,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777812383452
-    },
-    "DOGEUSDT-PERP": {
       "size": 0,
       "side": "flat",
-      "symbol": "DOGEUSDT-PERP",
+      "symbol": "SOLUSDT-PERP",
       "avgEntry": 0,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777812579236
+      "lastUpdate": 1777814271757
+    },
+    "BNBUSDT-PERP": {
+      "size": 0.0484,
+      "side": "short",
+      "symbol": "BNBUSDT-PERP",
+      "avgEntry": 619.64,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777814273878
     },
     "XRPUSDT-PERP": {
-      "size": 21.4746,
-      "side": "short",
+      "size": 0,
+      "side": "flat",
       "symbol": "XRPUSDT-PERP",
-      "avgEntry": 1.397,
+      "avgEntry": 0,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777812582493
+      "lastUpdate": 1777814271757
     },
     "ADAUSDT-PERP": {
       "size": 0,
@@ -54,7 +46,15 @@
       "symbol": "ADAUSDT-PERP",
       "avgEntry": 0,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777812579236
+      "lastUpdate": 1777814271757
+    },
+    "DOGEUSDT-PERP": {
+      "size": 275.6086,
+      "side": "short",
+      "symbol": "DOGEUSDT-PERP",
+      "avgEntry": 0.10885,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777814269622
     },
     "AVAXUSDT-PERP": {
       "size": 0,
@@ -62,7 +62,7 @@
       "symbol": "AVAXUSDT-PERP",
       "avgEntry": 0,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777812579236
+      "lastUpdate": 1777814271757
     },
     "LINKUSDT-PERP": {
       "size": 0,
@@ -70,17 +70,9 @@
       "symbol": "LINKUSDT-PERP",
       "avgEntry": 0,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777812579236
-    },
-    "MATICUSDT-PERP": {
-      "size": 0,
-      "side": "flat",
-      "symbol": "MATICUSDT-PERP",
-      "avgEntry": 0,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777812579236
+      "lastUpdate": 1777814271757
     }
   },
-  "lastBarCloseTime": 1777812572935,
-  "timestamp": 1777812582494
+  "lastBarCloseTime": 1777814269732,
+  "timestamp": 1777814273878
 }

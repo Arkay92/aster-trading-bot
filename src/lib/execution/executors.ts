@@ -304,11 +304,19 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
     const symbol = this.normalizeSymbol(symbolArg);
     try {
       const position = await this.getCurrentPosition(symbol);
-      if (!position || position.positionAmt === "0") return;
-
-      const positionAmt = parseFloat(position.positionAmt);
+      const positionAmt = this.parsePositionAmount(position);
+      if (!position || positionAmt === 0) {
+        this.persist({ type: "info", message: `Close skipped; ${symbol} is already flat`, payload: { reason } });
+        return;
+      }
       const side = positionAmt > 0 ? "SELL" : "BUY";
-      const quantity = meta?.size ? Math.abs(Number(meta.size)).toString() : Math.abs(positionAmt).toString();
+      const requestedSize = meta?.size !== undefined ? Math.abs(Number(meta.size)) : Math.abs(positionAmt);
+      const quantityValue = Math.min(requestedSize, Math.abs(positionAmt));
+      if (!Number.isFinite(quantityValue) || quantityValue <= 0) {
+        this.persist({ type: "info", message: `Close skipped; computed ${symbol} close quantity is zero`, payload: { reason, positionAmt, requestedSize } });
+        return;
+      }
+      const quantity = quantityValue.toString();
 
       const closeOrder = {
         symbol: symbol,
@@ -333,12 +341,17 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
         if (!msg.includes("-2022")) throw error;
 
         const refreshed = await this.getCurrentPosition(symbol);
-        if (!refreshed || refreshed.positionAmt === "0") {
+        const refreshedAmt = this.parsePositionAmount(refreshed);
+        if (!refreshed || refreshedAmt === 0) {
           this.persist({ type: "info", message: `Close treated as complete; ${symbol} is already flat after reduceOnly rejection`, payload: { reason, error: msg } });
         } else {
-          const refreshedAmt = parseFloat(refreshed.positionAmt);
           const refreshedSide: "BUY" | "SELL" = refreshedAmt > 0 ? "SELL" : "BUY";
-          const refreshedQuantity = meta?.size ? Math.min(Math.abs(Number(meta.size)), Math.abs(refreshedAmt)).toString() : Math.abs(refreshedAmt).toString();
+          const refreshedQuantityValue = meta?.size ? Math.min(Math.abs(Number(meta.size)), Math.abs(refreshedAmt)) : Math.abs(refreshedAmt);
+          if (!Number.isFinite(refreshedQuantityValue) || refreshedQuantityValue <= 0) {
+            this.persist({ type: "info", message: `Close treated as complete; ${symbol} fallback quantity is zero`, payload: { reason, error: msg, refreshedAmt } });
+            return;
+          }
+          const refreshedQuantity = refreshedQuantityValue.toString();
           this.persist({ type: "info", message: `Retrying ${symbol} close without reduceOnly after -2022`, payload: { reason, side: refreshedSide, quantity: refreshedQuantity } });
           await this.withOrderRetry(`MARKET close ${symbol} without reduceOnly`, () =>
             SignedRequestLock.run(async () =>
@@ -390,10 +403,15 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
     try {
       const account = await SignedRequestLock.run(async () => this.v3.getAccount());
       const position = account.positions?.find((p: any) => p.symbol === symbol);
-      if (position && position.positionAmt !== "0") return position;
+      if (position && this.parsePositionAmount(position) !== 0) return position;
       return null;
     } catch {
       return null;
     }
+  }
+
+  private parsePositionAmount(position: { positionAmt?: string } | null | undefined): number {
+    const amount = Number(position?.positionAmt ?? 0);
+    return Number.isFinite(amount) && Math.abs(amount) > 0 ? amount : 0;
   }
 }

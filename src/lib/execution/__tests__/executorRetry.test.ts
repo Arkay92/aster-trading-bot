@@ -80,4 +80,29 @@ describe("LiveExecutor retry handling", () => {
     await expect(executor.enterLong(order)).rejects.toThrow("-5018");
     expect(mockNewOrder).toHaveBeenCalledTimes(1);
   });
+
+  it("does not submit zero-quantity close orders for flat precision-formatted positions", async () => {
+    mockGetAccount.mockResolvedValueOnce({
+      positions: [{ symbol: "BTCUSDT", positionAmt: "0.000", entryPrice: "100" }],
+    });
+    const executor = new LiveExecutor(credentials);
+
+    await executor.closePosition("BTCUSDT-PERP", "atr-stop", { price: 100 });
+
+    expect(mockNewOrder).not.toHaveBeenCalled();
+  });
+
+  it("does not retry reduceOnly fallback when refreshed position is flat", async () => {
+    mockGetAccount
+      .mockResolvedValueOnce({ positions: [{ symbol: "BTCUSDT", positionAmt: "-0.001", entryPrice: "100" }] })
+      .mockResolvedValueOnce({ positions: [{ symbol: "BTCUSDT", positionAmt: "0.000", entryPrice: "100" }] });
+    mockNewOrder.mockRejectedValueOnce(new Error("-2022 ReduceOnly Order is rejected"));
+    const executor = new LiveExecutor(credentials, {
+      risk: { execution: { maxOrderRetries: 0 } },
+    });
+
+    await executor.closePosition("BTCUSDT-PERP", "atr-stop", { price: 100 });
+
+    expect(mockNewOrder).toHaveBeenCalledTimes(1);
+  });
 });
