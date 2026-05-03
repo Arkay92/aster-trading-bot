@@ -65,4 +65,57 @@ describe("BotRunner risk limits", () => {
     expect(metrics.daily.drawdown).toBe(60);
     expect(metrics.daily.halted).toBe(true);
   });
+
+  it("counts in-flight entries against strategy position caps", async () => {
+    let releaseOrder!: () => void;
+    const delayedExecutor = {
+      enterLong: jest.fn(),
+      enterShort: jest.fn(() => new Promise<void>((resolve) => { releaseOrder = resolve; })),
+      closePosition: jest.fn(),
+    };
+    const bot = new BotRunner({
+      ...config,
+      strategyTypes: ["rsi-reversion"],
+      credentials: { ...config.credentials, pairSymbols: ["BTCUSDT", "ETHUSDT"] },
+      risk: {
+        ...config.risk,
+        maxPositions: 10,
+        maxDirectionalPositions: 10,
+        perStrategyMaxPositions: { "rsi-reversion": 1 },
+        requireStructureBreak: false,
+        requireVolumeSpike: false,
+        useMarketRegimeFilter: false,
+      },
+    }, [makeStream() as any], delayedExecutor as any);
+    const botAny = bot as any;
+    botAny.usdtBalance = 1_000;
+
+    const signal = {
+      type: "short",
+      reason: "test",
+      indicators: {},
+      trend: {},
+    };
+    const bar = {
+      startTime: 1,
+      endTime: 2,
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100,
+      volume: 10,
+      buyVolume: 1,
+      sellVolume: 9,
+    };
+
+    const first = botAny.applySignal("BTCUSDT-PERP", "rsi-reversion", signal, bar, false);
+    await Promise.resolve();
+    const second = botAny.applySignal("ETHUSDT-PERP", "rsi-reversion", signal, bar, false);
+
+    await second;
+    releaseOrder();
+    await first;
+
+    expect(delayedExecutor.enterShort).toHaveBeenCalledTimes(1);
+  });
 });

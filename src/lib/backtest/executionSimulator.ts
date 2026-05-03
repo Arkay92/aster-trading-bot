@@ -1,0 +1,131 @@
+import type { PositionSide, StrategySignal, SyntheticBar } from "../types";
+
+export type SimulatedTrade = {
+  symbol: string;
+  side: Exclude<PositionSide, "flat">;
+  entryTime: number;
+  exitTime: number;
+  entryPrice: number;
+  exitPrice: number;
+  size: number;
+  grossPnl: number;
+  fees: number;
+  pnl: number;
+  returnPct: number;
+  entryReason: string;
+  exitReason: string;
+};
+
+type OpenPosition = {
+  symbol: string;
+  side: Exclude<PositionSide, "flat">;
+  entryTime: number;
+  entryPrice: number;
+  size: number;
+  entryReason: string;
+};
+
+export type ExecutionSimulatorOptions = {
+  startingBalance: number;
+  positionSizeUsdt: number;
+  feeRatePct?: number;
+  slippagePct?: number;
+};
+
+export class ExecutionSimulator {
+  private balance: number;
+  private readonly positions = new Map<string, OpenPosition>();
+  private readonly trades: SimulatedTrade[] = [];
+  private equityPeak: number;
+  private maxDrawdown = 0;
+
+  constructor(private readonly options: ExecutionSimulatorOptions) {
+    this.balance = options.startingBalance;
+    this.equityPeak = options.startingBalance;
+  }
+
+  onSignal(symbol: string, signal: NonNullable<StrategySignal>, bar: SyntheticBar): void {
+    const current = this.positions.get(symbol);
+    if (current?.side === signal.type) return;
+
+    if (current) {
+      this.close(symbol, bar, `flip-${signal.type}`);
+    }
+
+    this.open(symbol, signal.type, bar, signal.reason);
+  }
+
+  close(symbol: string, bar: SyntheticBar, reason: string): void {
+    const position = this.positions.get(symbol);
+    if (!position) return;
+
+    const exitPrice = this.applySlippage(bar.close, position.side === "long" ? "sell" : "buy");
+    const grossPnl = position.side === "long"
+      ? (exitPrice - position.entryPrice) * position.size
+      : (position.entryPrice - exitPrice) * position.size;
+    const notionalIn = position.entryPrice * position.size;
+    const notionalOut = exitPrice * position.size;
+    const fees = (notionalIn + notionalOut) * ((this.options.feeRatePct ?? 0) / 100);
+    const pnl = grossPnl - fees;
+    this.balance += pnl;
+    this.positions.delete(symbol);
+    this.updateDrawdown();
+
+    this.trades.push({
+      symbol,
+      side: position.side,
+      entryTime: position.entryTime,
+      exitTime: bar.endTime,
+      entryPrice: position.entryPrice,
+      exitPrice,
+      size: position.size,
+      grossPnl,
+      fees,
+      pnl,
+      returnPct: notionalIn > 0 ? (pnl / notionalIn) * 100 : 0,
+      entryReason: position.entryReason,
+      exitReason: reason,
+    });
+  }
+
+  closeAll(bar: SyntheticBar, reason: string): void {
+    for (const symbol of Array.from(this.positions.keys())) {
+      this.close(symbol, bar, reason);
+    }
+  }
+
+  getTrades(): SimulatedTrade[] {
+    return [...this.trades];
+  }
+
+  getBalance(): number {
+    return this.balance;
+  }
+
+  getMaxDrawdown(): number {
+    return this.maxDrawdown;
+  }
+
+  private open(symbol: string, side: Exclude<PositionSide, "flat">, bar: SyntheticBar, reason: string): void {
+    const entryPrice = this.applySlippage(bar.close, side === "long" ? "buy" : "sell");
+    const size = this.options.positionSizeUsdt / entryPrice;
+    this.positions.set(symbol, {
+      symbol,
+      side,
+      entryTime: bar.endTime,
+      entryPrice,
+      size,
+      entryReason: reason,
+    });
+  }
+
+  private applySlippage(price: number, action: "buy" | "sell"): number {
+    const slippage = (this.options.slippagePct ?? 0) / 100;
+    return action === "buy" ? price * (1 + slippage) : price * (1 - slippage);
+  }
+
+  private updateDrawdown(): void {
+    this.equityPeak = Math.max(this.equityPeak, this.balance);
+    this.maxDrawdown = Math.max(this.maxDrawdown, this.equityPeak - this.balance);
+  }
+}

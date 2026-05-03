@@ -230,6 +230,7 @@ export type Credentials = {
 
 export type AppConfig = {
   mode: Mode;
+  enableDynamicPairRanking?: boolean;
   paperTrading?: {
     enabled: boolean;
     startingBalance: number;

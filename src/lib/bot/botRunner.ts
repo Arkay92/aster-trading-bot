@@ -60,7 +60,7 @@ export class BotRunner {
   private readonly emitter = new EventEmitter();
   private readonly barBuilders = new Map<string, VirtualBarBuilder>();
   private readonly engines = new Map<string, Map<StrategyType, Engine>>();
-  private readonly restPoller: RestPoller;
+  private readonly restPoller?: RestPoller;
   private readonly stateManager: PositionStateManager;
   private readonly orderTracker: OrderTracker;
   private readonly statePersistence: StatePersistence;
@@ -70,6 +70,9 @@ export class BotRunner {
   private unsubscribers: Array<() => void> = [];
   private processedSignals = new Set<string>();
   private symbolActionLocks = new Set<string>();
+  private pendingGlobalEntries = 0;
+  private pendingStrategyEntries = new Map<StrategyType, number>();
+  private pendingDirectionalEntries = new Map<"long" | "short", number>();
   private lastBarCloseTimes = new Map<string, number>();
   private readonly strategyTypes: StrategyType[];
   private readonly timeframeMs: number;
@@ -99,9 +102,11 @@ export class BotRunner {
   private htfEmaSlowBySymbol = new Map<string, EMA>();
   private lastTradeSide = new Map<string, string>();
   private lastTradeAt = new Map<string, number>();
+  private entryBlockLogAt = new Map<string, number>();
   
   private fundingBySymbol = new Map<string, number>();
   private premiumBySymbol = new Map<string, number>();
+  private invalidPerpSignalSymbols = new Set<string>();
   private pendingBreakouts = new Map<string, {
     direction: "long" | "short";
     level: number;
@@ -153,7 +158,7 @@ export class BotRunner {
       this.positions.set(symbol, { side: "flat", size: 0, symbol });
     }
     
-    this.restPoller = new RestPoller(config.credentials);
+    this.restPoller = config.mode === "live" ? new RestPoller(config.credentials) : undefined;
     this.stateManager = new PositionStateManager();
     this.orderTracker = new OrderTracker();
     this.statePersistence = new StatePersistence();
@@ -187,13 +192,19 @@ export class BotRunner {
   async start() {
     this.subscribe();
     if (this.config.mode === "paper") {
-       if (this.config.paperTrading?.enabled) this.usdtBalance = this.config.paperTrading.startingBalance;
+      this.usdtBalance = this.config.paperTrading?.startingBalance ?? 10000;
+      this.initialBalanceFetched = true;
+    } else if (this.config.mode === "dry-run") {
+      this.usdtBalance = this.config.risk.maxPositionSize;
+      this.initialBalanceFetched = true;
     } else {
       this.startRestPolling();
     }
-    this.log("Waiting for initial balance fetch...");
-    const waitUntil = Date.now() + 15_000;
-    while (!this.initialBalanceFetched && Date.now() < waitUntil) await new Promise(r => setTimeout(r, 250));
+    if (!this.initialBalanceFetched) {
+      this.log("Waiting for initial balance fetch...");
+      const waitUntil = Date.now() + 15_000;
+      while (!this.initialBalanceFetched && Date.now() < waitUntil) await new Promise(r => setTimeout(r, 250));
+    }
     this.resetDailyRiskWindow();
     for (const stream of this.tickStreams) await stream.start();
     this.startPulse();
@@ -218,6 +229,7 @@ export class BotRunner {
 
   private async refreshPerpSignals(symbol: string) {
     if (this.config.mode !== "live") return;
+    if (this.invalidPerpSignalSymbols.has(symbol)) return;
     try {
       const raw = symbol.replace("-PERP", "");
       const data = await (this.executor as any).v3?.getPremiumIndex?.(raw);
@@ -230,6 +242,11 @@ export class BotRunner {
       this.fundingBySymbol.set(symbol, funding);
       this.premiumBySymbol.set(symbol, ((mark - index) / index) * 100);
     } catch (e) {
+      if (String(e).includes("-1121")) {
+        this.invalidPerpSignalSymbols.add(symbol);
+        this.log(`Skipping premium polling for invalid symbol ${symbol}`, { error: String(e) });
+        return;
+      }
       this.log(`Failed to refresh premium data for ${symbol}`, { error: String(e) });
     }
   }
@@ -240,7 +257,7 @@ export class BotRunner {
       const now = Date.now();
       for (const [symbol, builder] of this.barBuilders.entries()) {
         const closedBar = builder.checkTime(now);
-        if (closedBar) void this.handleBarClose(symbol, closedBar);
+        if (closedBar) void this.handleBarClose(symbol, closedBar).catch((error) => this.log("Bar close handler failed", { symbol, error: String(error) }));
 
         const htfBuilder = this.htfBuilders.get(symbol);
         if (htfBuilder) {
@@ -259,7 +276,7 @@ export class BotRunner {
   async stop() {
     this.stopPulse();
     this.stopFundingPoll();
-    this.restPoller.stop();
+    this.restPoller?.stop();
     for (const stream of this.tickStreams) await stream.stop();
     this.unsubscribers.forEach(off => off());
     this.unsubscribers = [];
@@ -275,6 +292,7 @@ export class BotRunner {
   }
 
   private startRestPolling(): void {
+    if (!this.restPoller) return;
     this.restPoller.on("position", (position) => {
       const symbol = this.toPerpSymbol(position.symbol);
       if (!symbol) return;
@@ -311,7 +329,7 @@ export class BotRunner {
       this.unsubscribers.push(stream.on("tick", (t: any) => {
         // Feed tick to executor for slippage tracking
         if ((this.executor as any).updateTick) (this.executor as any).updateTick(t);
-        void this.handleTick(t);
+        void this.handleTick(t).catch((error) => this.log("Tick handler failed", { symbol: t?.symbol, error: String(error) }));
       }));
       this.unsubscribers.push(stream.on("error", (e: any) => this.log("Tick stream error", { error: String(e) })));
     }
@@ -471,20 +489,42 @@ export class BotRunner {
     this.symbolActionLocks.add(symbol);
     try {
       const now = Date.now();
-      if (now < (this.cooldownUntil.get(symbol) || 0)) return;
-      if (this.isOverTradeLimit(symbol)) return;
-      if (now - (this.lastEntryAt.get(symbol) || 0) < (this.config.risk.minTradeIntervalMs || 15000)) return;
+      const cooldownUntil = this.cooldownUntil.get(symbol) || 0;
+      if (now < cooldownUntil) {
+        this.logEntryBlock(symbol, "cooldown-active", { until: new Date(cooldownUntil).toISOString(), strategyType, signal: signal.type });
+        return;
+      }
+      if (this.isOverTradeLimit(symbol)) {
+        this.logEntryBlock(symbol, "max-trades-per-hour", { maxTradesPerHour: this.config.risk.maxTradesPerHour, strategyType, signal: signal.type });
+        return;
+      }
+      const minTradeIntervalMs = this.config.risk.minTradeIntervalMs || 15000;
+      const lastEntryAt = this.lastEntryAt.get(symbol) || 0;
+      if (now - lastEntryAt < minTradeIntervalMs) {
+        this.logEntryBlock(symbol, "min-trade-interval", { nextAllowedAt: new Date(lastEntryAt + minTradeIntervalMs).toISOString(), strategyType, signal: signal.type });
+        return;
+      }
       // Check executor-level symbol blacklist (e.g. -5018 notional limit)
-      if ((this.executor as any).isSymbolBlacklisted?.(this.toPerpSymbol(symbol).replace("-PERP", ""))) return;
+      if ((this.executor as any).isSymbolBlacklisted?.(this.toPerpSymbol(symbol).replace("-PERP", ""))) {
+        this.logEntryBlock(symbol, "executor-symbol-blacklist", { strategyType, signal: signal.type });
+        return;
+      }
       
       // Same-direction cooldown
       if (this.config.risk.sameDirectionCooldownMinutes && this.lastTradeSide.get(symbol) === signal.type) {
         const lastAt = this.lastTradeAt.get(symbol) || 0;
-        if (now - lastAt < this.config.risk.sameDirectionCooldownMinutes * 60000) return;
+        const sameDirectionCooldownMs = this.config.risk.sameDirectionCooldownMinutes * 60000;
+        if (now - lastAt < sameDirectionCooldownMs) {
+          this.logEntryBlock(symbol, "same-direction-cooldown", { nextAllowedAt: new Date(lastAt + sameDirectionCooldownMs).toISOString(), strategyType, signal: signal.type });
+          return;
+        }
       }
 
       const context = this.getMarketContext(symbol, bar);
-      if (this.config.risk.requireRegimeMatching && !this.isStrategyAllowedForRegime(symbol, strategyType)) return;
+      if (this.config.risk.requireRegimeMatching && !this.isStrategyAllowedForRegime(symbol, strategyType)) {
+        this.logEntryBlock(symbol, "regime-mismatch", { strategyType, signal: signal.type, regime: context.regime });
+        return;
+      }
 
       // Breakout Retest Intercept
       if (!isRetest && this.config.risk.requireStructureBreak) {
@@ -523,16 +563,31 @@ export class BotRunner {
       }
       
       const position = this.positions.get(symbol) || { side: "flat", size: 0, symbol };
-      const sameDirectionCount = Array.from(this.positions.values()).filter(p => p.side === signal.type).length;
-      if (position.side === "flat" && sameDirectionCount >= (this.config.risk.maxDirectionalPositions || 3)) return;
+      const isNewEntry = position.side === "flat";
+      const sameDirectionCount = Array.from(this.positions.values()).filter(p => p.side === signal.type).length + this.getPendingDirectionalEntryCount(signal.type);
+      if (isNewEntry && sameDirectionCount >= (this.config.risk.maxDirectionalPositions || 3)) {
+        this.logEntryBlock(symbol, "max-directional-positions", { sameDirectionCount, maxDirectionalPositions: this.config.risk.maxDirectionalPositions || 3, pendingDirectionalEntries: this.getPendingDirectionalEntryCount(signal.type), strategyType, signal: signal.type });
+        return;
+      }
 
-      const activeCount = this.getActiveStrategyPositionCount(strategyType);
-      const globalActiveCount = this.getGlobalActivePositionCount();
-      if (activeCount >= (this.config.risk.perStrategyMaxPositions?.[strategyType] || this.config.risk.maxPositions || 1)) return;
-      if (globalActiveCount >= (this.config.risk.maxPositions || 1)) return;
+      const activeCount = this.getActiveStrategyPositionCount(strategyType) + this.getPendingStrategyEntryCount(strategyType);
+      const globalActiveCount = this.getGlobalActivePositionCount() + this.pendingGlobalEntries;
+      const strategyMax = this.config.risk.perStrategyMaxPositions?.[strategyType] || this.config.risk.maxPositions || 1;
+      const globalMax = this.config.risk.maxPositions || 1;
+      if (activeCount >= strategyMax) {
+        this.logEntryBlock(symbol, "max-strategy-positions", { activeCount, strategyMax, pendingStrategyEntries: this.getPendingStrategyEntryCount(strategyType), strategyType, signal: signal.type });
+        return;
+      }
+      if (globalActiveCount >= globalMax) {
+        this.logEntryBlock(symbol, "max-global-positions", { globalActiveCount, globalMax, pendingGlobalEntries: this.pendingGlobalEntries, activePositions: Array.from(this.positions.values()).filter(p => p.side !== "flat") });
+        return;
+      }
 
       const size = this.computePositionSize(symbol, bar.close);
-      if (size <= 0) return;
+      if (size <= 0) {
+        this.logEntryBlock(symbol, "position-size-zero", { usdtBalance: this.usdtBalance, maxPositionSize: this.config.risk.maxPositionSize, strategyType, signal: signal.type });
+        return;
+      }
 
       const order: TradeInstruction = { symbol, size, leverage: this.config.risk.maxLeverage, price: bar.close, signalReason: signal.reason, timestamp: bar.endTime, side: signal.type };
       if (position.side !== "flat") {
@@ -541,8 +596,33 @@ export class BotRunner {
         if (!this.canFlip(bar.endTime)) return;
         await this.closePosition(symbol, `flip-${signal.type}`, { price: bar.close });
       }
-      await this.enterPosition(symbol, strategyType, signal.type, order);
+      if (isNewEntry) this.reserveEntry(strategyType, signal.type);
+      try {
+        await this.enterPosition(symbol, strategyType, signal.type, order);
+      } finally {
+        if (isNewEntry) this.releaseEntryReservation(strategyType, signal.type);
+      }
     } finally { this.symbolActionLocks.delete(symbol); }
+  }
+
+  private reserveEntry(strategyType: StrategyType, side: "long" | "short") {
+    this.pendingGlobalEntries++;
+    this.pendingStrategyEntries.set(strategyType, this.getPendingStrategyEntryCount(strategyType) + 1);
+    this.pendingDirectionalEntries.set(side, this.getPendingDirectionalEntryCount(side) + 1);
+  }
+
+  private releaseEntryReservation(strategyType: StrategyType, side: "long" | "short") {
+    this.pendingGlobalEntries = Math.max(0, this.pendingGlobalEntries - 1);
+    this.pendingStrategyEntries.set(strategyType, Math.max(0, this.getPendingStrategyEntryCount(strategyType) - 1));
+    this.pendingDirectionalEntries.set(side, Math.max(0, this.getPendingDirectionalEntryCount(side) - 1));
+  }
+
+  private getPendingStrategyEntryCount(strategyType: StrategyType) {
+    return this.pendingStrategyEntries.get(strategyType) || 0;
+  }
+
+  private getPendingDirectionalEntryCount(side: "long" | "short") {
+    return this.pendingDirectionalEntries.get(side) || 0;
   }
 
   private async enterPosition(symbol: string, strategyType: StrategyType, side: "long" | "short", order: TradeInstruction) {
@@ -567,7 +647,12 @@ export class BotRunner {
   private async closePosition(symbol: string, reason: string, meta?: Record<string, unknown>) {
     const position = this.positions.get(symbol);
     if (!position || position.side === "flat") return;
-    await this.executor.closePosition(symbol, reason, meta);
+    try {
+      await this.executor.closePosition(symbol, reason, meta);
+    } catch (error) {
+      this.log(`Close failed on ${symbol}`, { reason, error: String(error) });
+      return;
+    }
     this.tradeStats.closeTrade(symbol, Number(meta?.price || position.entryPrice), reason);
     this.updateRiskFromLastTrade();
     this.positions.set(symbol, { side: "flat", size: 0, symbol });
@@ -601,6 +686,15 @@ export class BotRunner {
     const history = this.symbolTradeCountInLastHour.get(symbol) || [];
     history.push(Date.now());
     this.symbolTradeCountInLastHour.set(symbol, history);
+  }
+
+  private logEntryBlock(symbol: string, reason: string, payload?: Record<string, unknown>) {
+    const key = `${symbol}:${reason}`;
+    const now = Date.now();
+    const last = this.entryBlockLogAt.get(key) || 0;
+    if (now - last < 60_000) return;
+    this.entryBlockLogAt.set(key, now);
+    this.log(`Entry blocked on ${symbol}: ${reason}`, payload);
   }
 
   private async evaluateProtectiveExits(symbol: string, bar: SyntheticBar) {

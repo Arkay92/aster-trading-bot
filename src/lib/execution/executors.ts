@@ -60,7 +60,7 @@ export class DryRunExecutor extends BaseExecutor implements ExecutionAdapter {
 export class PaperExecutor extends BaseExecutor implements ExecutionAdapter {
   protected readonly label = "PaperTrading";
   private balance: number;
-  private currentPosition: { side: "long" | "short"; size: number; entryPrice: number } | null = null;
+  private positions = new Map<string, { side: "long" | "short"; size: number; entryPrice: number }>();
   private lastTicks = new Map<string, Tick>();
   
   constructor(initialBalance: number) {
@@ -78,40 +78,49 @@ export class PaperExecutor extends BaseExecutor implements ExecutionAdapter {
   }
 
   async enterLong(order: TradeInstruction): Promise<void> {
-    this.currentPosition = { side: "long", size: order.size, entryPrice: order.price };
+    this.positions.set(this.normalizeSymbol(order.symbol), { side: "long", size: order.size, entryPrice: order.price });
     this.persist({ type: "enter", side: "long", order });
   }
 
   async enterShort(order: TradeInstruction): Promise<void> {
-    this.currentPosition = { side: "short", size: order.size, entryPrice: order.price };
+    this.positions.set(this.normalizeSymbol(order.symbol), { side: "short", size: order.size, entryPrice: order.price });
     this.persist({ type: "enter", side: "short", order });
   }
 
   async closePosition(symbol: string, reason: string, meta?: Record<string, unknown>): Promise<void> {
-    if (!this.currentPosition) return;
+    const normalizedSymbol = this.normalizeSymbol(symbol);
+    const position = this.positions.get(normalizedSymbol);
+    if (!position) return;
     
-    let exitPrice = this.currentPosition.entryPrice;
+    let exitPrice = position.entryPrice;
     if (meta) {
       if (typeof meta.close === "number") exitPrice = meta.close;
       else if (typeof meta.price === "number") exitPrice = meta.price;
     }
 
-    const { side, size, entryPrice } = this.currentPosition;
+    const { side, entryPrice } = position;
+    const closeSize = meta?.size ? Math.min(Math.abs(Number(meta.size)), position.size) : position.size;
     const pnl = side === "long" 
-      ? (exitPrice - entryPrice) * size
-      : (entryPrice - exitPrice) * size;
+      ? (exitPrice - entryPrice) * closeSize
+      : (entryPrice - exitPrice) * closeSize;
       
     this.balance += pnl;
     
-    console.log(`[PaperTrading] Position closed on ${symbol}. PNL: ${pnl.toFixed(4)} USDT`);
+    console.log(`[PaperTrading] Position closed on ${normalizedSymbol}. PNL: ${pnl.toFixed(4)} USDT`);
     console.log(`[PaperTrading] Cumulative Balance: ${this.balance.toFixed(4)} USDT`);
     
-    this.currentPosition = null;
-    this.persist({ type: "close", reason, meta: { ...meta, symbol, pnl, newBalance: this.balance }, timestamp: Date.now() });
+    const remainingSize = position.size - closeSize;
+    if (remainingSize > 0) this.positions.set(normalizedSymbol, { ...position, size: remainingSize });
+    else this.positions.delete(normalizedSymbol);
+    this.persist({ type: "close", reason, meta: { ...meta, symbol: normalizedSymbol, pnl, newBalance: this.balance, closedSize: closeSize }, timestamp: Date.now() });
   }
   
   get virtualBalance(): number {
     return this.balance;
+  }
+
+  private normalizeSymbol(symbol: string): string {
+    return symbol.toUpperCase().replace(/-PERP$/, "");
   }
 }
 
@@ -301,19 +310,47 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
       const side = positionAmt > 0 ? "SELL" : "BUY";
       const quantity = meta?.size ? Math.abs(Number(meta.size)).toString() : Math.abs(positionAmt).toString();
 
-      await this.withOrderRetry(`MARKET close ${symbol}`, () =>
-        SignedRequestLock.run(async () =>
-          this.v3.newOrder({
-            symbol: symbol,
-            side,
-            type: "MARKET",
-            quantity,
-            priceHint: Number(meta?.price || 0),
-            reduceOnly: "true",
-            ...(this.hedgeMode ? { positionSide: positionAmt > 0 ? "LONG" : "SHORT" } : {}),
-          }),
-        )
-      );
+      const closeOrder = {
+        symbol: symbol,
+        side: side as "BUY" | "SELL",
+        type: "MARKET" as const,
+        quantity,
+        priceHint: Number(meta?.price || 0),
+        ...(this.hedgeMode ? { positionSide: positionAmt > 0 ? "LONG" as const : "SHORT" as const } : {}),
+      };
+
+      try {
+        await this.withOrderRetry(`MARKET close ${symbol}`, () =>
+          SignedRequestLock.run(async () =>
+            this.v3.newOrder({
+              ...closeOrder,
+              reduceOnly: "true",
+            }),
+          )
+        );
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (!msg.includes("-2022")) throw error;
+
+        const refreshed = await this.getCurrentPosition(symbol);
+        if (!refreshed || refreshed.positionAmt === "0") {
+          this.persist({ type: "info", message: `Close treated as complete; ${symbol} is already flat after reduceOnly rejection`, payload: { reason, error: msg } });
+        } else {
+          const refreshedAmt = parseFloat(refreshed.positionAmt);
+          const refreshedSide: "BUY" | "SELL" = refreshedAmt > 0 ? "SELL" : "BUY";
+          const refreshedQuantity = meta?.size ? Math.min(Math.abs(Number(meta.size)), Math.abs(refreshedAmt)).toString() : Math.abs(refreshedAmt).toString();
+          this.persist({ type: "info", message: `Retrying ${symbol} close without reduceOnly after -2022`, payload: { reason, side: refreshedSide, quantity: refreshedQuantity } });
+          await this.withOrderRetry(`MARKET close ${symbol} without reduceOnly`, () =>
+            SignedRequestLock.run(async () =>
+              this.v3.newOrder({
+                ...closeOrder,
+                side: refreshedSide,
+                quantity: refreshedQuantity,
+              }),
+            )
+          );
+        }
+      }
 
       this.persist({ type: "close", reason, meta, timestamp: Date.now() });
     } catch (error) {

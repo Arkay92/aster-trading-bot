@@ -4,9 +4,9 @@
       "size": 0.0004,
       "side": "short",
       "symbol": "BTCUSDT-PERP",
-      "avgEntry": 78506.7,
+      "avgEntry": 78752.5,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777808395951
+      "lastUpdate": 1777812578018
     },
     "ETHUSDT-PERP": {
       "size": 0,
@@ -14,47 +14,15 @@
       "symbol": "ETHUSDT-PERP",
       "avgEntry": 0,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777808394351
-    },
-    "ASTERUSDT-PERP": {
-      "size": 0,
-      "side": "flat",
-      "symbol": "ASTERUSDT-PERP",
-      "avgEntry": 0,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777808394351
+      "lastUpdate": 1777812579236
     },
     "SOLUSDT-PERP": {
-      "size": 0,
-      "side": "flat",
+      "size": 0.3568,
+      "side": "short",
       "symbol": "SOLUSDT-PERP",
-      "avgEntry": 0,
+      "avgEntry": 84.08,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777808394351
-    },
-    "SKYAIUSDT-PERP": {
-      "size": 0,
-      "side": "flat",
-      "symbol": "SKYAIUSDT-PERP",
-      "avgEntry": 0,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777808394351
-    },
-    "DOGEUSDT-PERP": {
-      "size": 0,
-      "side": "flat",
-      "symbol": "DOGEUSDT-PERP",
-      "avgEntry": 0,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777808394351
-    },
-    "UBUSDT-PERP": {
-      "size": 0,
-      "side": "flat",
-      "symbol": "UBUSDT-PERP",
-      "avgEntry": 0,
-      "unrealizedPnl": 0,
-      "lastUpdate": 1777808394351
+      "lastUpdate": 1777812581414
     },
     "BNBUSDT-PERP": {
       "size": 0.0485,
@@ -62,9 +30,57 @@
       "symbol": "BNBUSDT-PERP",
       "avgEntry": 618.8,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777807904447
+      "lastUpdate": 1777812383452
+    },
+    "DOGEUSDT-PERP": {
+      "size": 0,
+      "side": "flat",
+      "symbol": "DOGEUSDT-PERP",
+      "avgEntry": 0,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777812579236
+    },
+    "XRPUSDT-PERP": {
+      "size": 21.4746,
+      "side": "short",
+      "symbol": "XRPUSDT-PERP",
+      "avgEntry": 1.397,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777812582493
+    },
+    "ADAUSDT-PERP": {
+      "size": 0,
+      "side": "flat",
+      "symbol": "ADAUSDT-PERP",
+      "avgEntry": 0,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777812579236
+    },
+    "AVAXUSDT-PERP": {
+      "size": 0,
+      "side": "flat",
+      "symbol": "AVAXUSDT-PERP",
+      "avgEntry": 0,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777812579236
+    },
+    "LINKUSDT-PERP": {
+      "size": 0,
+      "side": "flat",
+      "symbol": "LINKUSDT-PERP",
+      "avgEntry": 0,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777812579236
+    },
+    "MATICUSDT-PERP": {
+      "size": 0,
+      "side": "flat",
+      "symbol": "MATICUSDT-PERP",
+      "avgEntry": 0,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777812579236
     }
   },
-  "lastBarCloseTime": 1777808393886,
-  "timestamp": 1777808395951
+  "lastBarCloseTime": 1777812572935,
+  "timestamp": 1777812582494
 }

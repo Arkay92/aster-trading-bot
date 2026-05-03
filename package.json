@@ -6,6 +6,7 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:smoke": "jest src/lib/execution/__tests__/apiSmoke.test.ts",
+    "backtest": "tsx src/backtest/index.ts",
     "bot": "tsx src/bot/index.ts",
     "register:api-key": "tsx scripts/register-aster-api-key.ts"
   },

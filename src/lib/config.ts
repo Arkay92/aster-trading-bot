@@ -26,8 +26,8 @@ const envBoolean = z.preprocess((value) => {
 const envSchema = z.object({
   ASTER_RPC_URL: z.string().url(),
   ASTER_WS_URL: z.string().url(),
-  ASTER_API_KEY: z.string().min(1, "API key is required"),
-  ASTER_PRIVATE_KEY: z.string().min(1, "Private key is required"),
+  ASTER_API_KEY: z.string().optional(),
+  ASTER_PRIVATE_KEY: z.string().optional(),
   ASTER_USER_ADDRESS: z.string().optional(),
   ASTER_SIGNER_ADDRESS: z.string().optional(),
   ASTER_SIGNER_PRIVATE_KEY: z.string().optional(),
@@ -45,6 +45,7 @@ const envSchema = z.object({
   HEDGE_MODE: envBoolean.optional(),
   ADX_THRESHOLD: z.coerce.number().min(0).max(100).optional(),
   MODE: z.enum(["dry-run", "live"]),
+  ENABLE_DYNAMIC_PAIR_RANKING: envBoolean.optional(),
   PAPER_TRADING: envBoolean.optional(),
   PAPER_STARTING_BALANCE: z.coerce.number().positive().optional(),
   STRATEGY_TYPE: z.enum(["watermellon", "peach-hybrid", "swing", "ema-cross", "rsi-reversion"]).optional(),
@@ -147,6 +148,21 @@ export const loadConfig = (overrides?: Partial<AppConfig>): AppConfig => {
   }
 
   const env = parsed.data;
+  const isPaper = env.PAPER_TRADING ?? false;
+  const mode = overrides?.mode ?? (isPaper ? "paper" : env.MODE);
+  if (mode === "live") {
+    const missing: z.ZodIssue[] = [];
+    if (!env.ASTER_API_KEY?.trim()) {
+      missing.push({ code: z.ZodIssueCode.custom, path: ["ASTER_API_KEY"], message: "API key is required in live mode" });
+    }
+    if (!env.ASTER_PRIVATE_KEY?.trim()) {
+      missing.push({ code: z.ZodIssueCode.custom, path: ["ASTER_PRIVATE_KEY"], message: "Private key is required in live mode" });
+    }
+    if (missing.length > 0) {
+      throw new Error(`Invalid environment configuration: ${formatErrors(missing)}`);
+    }
+  }
+
   const strategyType = env.STRATEGY_TYPE ?? "watermellon";
   const enabledStrategyTypes: StrategyType[] = env.RUN_ALL_STRATEGIES
     ? ["watermellon", "peach-hybrid", "swing", "ema-cross", "rsi-reversion"]
@@ -280,11 +296,9 @@ export const loadConfig = (overrides?: Partial<AppConfig>): AppConfig => {
     },
   };
 
-  const isPaper = env.PAPER_TRADING ?? false;
-  const mode = isPaper ? "paper" : env.MODE;
-
   const config: AppConfig = {
     mode: mode as Mode,
+    enableDynamicPairRanking: env.ENABLE_DYNAMIC_PAIR_RANKING ?? false,
     paperTrading: isPaper
       ? { enabled: true, startingBalance: env.PAPER_STARTING_BALANCE ?? 10000 }
       : undefined,
@@ -294,8 +308,8 @@ export const loadConfig = (overrides?: Partial<AppConfig>): AppConfig => {
     credentials: {
       rpcUrl: env.ASTER_RPC_URL,
       wsUrl: env.ASTER_WS_URL,
-      apiKey: env.ASTER_API_KEY,
-      privateKey: env.ASTER_PRIVATE_KEY,
+      apiKey: env.ASTER_API_KEY ?? "",
+      privateKey: env.ASTER_PRIVATE_KEY ?? "",
       userAddress: env.ASTER_USER_ADDRESS || undefined,
       signerAddress: env.ASTER_SIGNER_ADDRESS || undefined,
       signerPrivateKey: env.ASTER_SIGNER_PRIVATE_KEY || undefined,
