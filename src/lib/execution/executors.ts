@@ -123,13 +123,17 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
   protected readonly label = "LiveExecutor";
   private readonly v3: AsterV3Client;
   private readonly shouldSetLeverage: boolean;
+  private hedgeMode = false;
   private leverageSignatureBroken = false;
   private lastTicks = new Map<string, Tick>();
+  private symbolMaxLeverage = new Map<string, number>();
+  private symbolBlacklist = new Map<string, number>();
 
   constructor(credentials: Credentials, private readonly config?: any) {
     super();
     this.v3 = new AsterV3Client(credentials);
     this.shouldSetLeverage = (process.env.SET_LEVERAGE_ON_ORDER || "false").toLowerCase() === "true";
+    this.hedgeMode = (process.env.HEDGE_MODE || "false").toLowerCase() === "true";
   }
 
   updateTick(tick: Tick) {
@@ -150,6 +154,13 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
 
   async enterShort(order: TradeInstruction): Promise<void> {
     await this.smartExecute(order, "SELL");
+  }
+
+  isSymbolBlacklisted(symbol: string): boolean {
+    const until = this.symbolBlacklist.get(symbol);
+    if (!until) return false;
+    if (Date.now() > until) { this.symbolBlacklist.delete(symbol); return false; }
+    return true;
   }
 
   private async smartExecute(order: TradeInstruction, side: "BUY" | "SELL"): Promise<void> {
@@ -180,7 +191,7 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
             quantity: order.size.toString(),
             price: order.price.toString(),
             timeInForce: "GTC",
-            positionSide: side === "BUY" ? "LONG" : "SHORT"
+            ...(this.hedgeMode ? { positionSide: side === "BUY" ? "LONG" : "SHORT" } : {}),
           })
         );
         
@@ -217,13 +228,19 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
           type: "MARKET",
           quantity: order.size.toString(),
           priceHint: order.price,
-          positionSide: (side === "BUY") ? "LONG" : "SHORT"
+          ...(this.hedgeMode ? { positionSide: side === "BUY" ? "LONG" : "SHORT" } : {}),
         }),
       );
       this.persist({ type: "enter", side: side === "BUY" ? "long" : "short", order });
     } catch (error) {
-       console.error(`[LiveExecutor] Failed to enter ${side} on ${symbol}`, error);
-       throw error;
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes("-5018")) {
+        const blacklistUntil = Date.now() + 4 * 60 * 60 * 1000;
+        this.symbolBlacklist.set(symbol, blacklistUntil);
+        console.warn(`[LiveExecutor] ${symbol} blacklisted for 4h — notional limit reached (-5018)`);
+      }
+      console.error(`[LiveExecutor] Failed to enter ${side} on ${symbol}`, error);
+      throw error;
     }
   }
 
@@ -245,7 +262,7 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
           quantity,
           priceHint: Number(meta?.price || 0),
           reduceOnly: "true",
-          positionSide: positionAmt > 0 ? "LONG" : "SHORT"
+          ...(this.hedgeMode ? { positionSide: positionAmt > 0 ? "LONG" : "SHORT" } : {}),
         }),
       );
 
@@ -256,14 +273,30 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
     }
   }
 
-  private async trySetLeverage(symbol: string, leverage: number): Promise<void> {
+  private async trySetLeverage(symbol: string, desiredLeverage: number): Promise<void> {
     if (!this.shouldSetLeverage || this.leverageSignatureBroken) return;
-    try {
-      await SignedRequestLock.run(async () => this.v3.changeLeverage(symbol, leverage));
-    } catch (error) {
-      const err = error instanceof Error ? error.message : String(error);
-      if (err.includes("Signature check failed")) this.leverageSignatureBroken = true;
-      console.warn(`[LiveExecutor] changeLeverage failed on ${symbol}: ${err}`);
+    const cachedMax = this.symbolMaxLeverage.get(symbol);
+    let leverage = cachedMax ? Math.min(desiredLeverage, cachedMax) : desiredLeverage;
+    while (leverage >= 1) {
+      try {
+        await SignedRequestLock.run(async () => this.v3.changeLeverage(symbol, leverage));
+        if (leverage < desiredLeverage) {
+          this.symbolMaxLeverage.set(symbol, leverage);
+          console.warn(`[LiveExecutor] ${symbol} leverage capped at ${leverage}x (wanted ${desiredLeverage}x)`);
+        }
+        return;
+      } catch (error) {
+        const err = error instanceof Error ? error.message : String(error);
+        if (err.includes("Signature check failed")) { this.leverageSignatureBroken = true; return; }
+        if (err.includes("-2027") || err.includes("exceeds the maximum")) {
+          leverage = Math.floor(leverage / 2);
+          if (leverage < 1) { console.error(`[LiveExecutor] Could not set leverage on ${symbol}`); return; }
+          console.warn(`[LiveExecutor] Leverage too high on ${symbol}, retrying at ${leverage}x`);
+          continue;
+        }
+        console.warn(`[LiveExecutor] changeLeverage failed on ${symbol}: ${err}`);
+        return;
+      }
     }
   }
 

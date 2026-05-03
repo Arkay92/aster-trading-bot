@@ -42,6 +42,7 @@ const envSchema = z.object({
   STRATEGY_OWNERSHIP_TIMEOUT_BARS: z.coerce.number().int().min(0).optional(),
   RUN_ALL_STRATEGIES: envBoolean.optional(),
   REQUIRE_TRENDING_MARKET: envBoolean.optional(),
+  HEDGE_MODE: envBoolean.optional(),
   ADX_THRESHOLD: z.coerce.number().min(0).max(100).optional(),
   MODE: z.enum(["dry-run", "live"]),
   PAPER_TRADING: envBoolean.optional(),

@@ -1,14 +1,70 @@
 {
   "positions": {
     "BTCUSDT-PERP": {
-      "size": 1.1905,
-      "side": "long",
+      "size": 0.0004,
+      "side": "short",
       "symbol": "BTCUSDT-PERP",
-      "avgEntry": 210,
+      "avgEntry": 78506.7,
       "unrealizedPnl": 0,
-      "lastUpdate": 1777805891647
+      "lastUpdate": 1777808395951
+    },
+    "ETHUSDT-PERP": {
+      "size": 0,
+      "side": "flat",
+      "symbol": "ETHUSDT-PERP",
+      "avgEntry": 0,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777808394351
+    },
+    "ASTERUSDT-PERP": {
+      "size": 0,
+      "side": "flat",
+      "symbol": "ASTERUSDT-PERP",
+      "avgEntry": 0,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777808394351
+    },
+    "SOLUSDT-PERP": {
+      "size": 0,
+      "side": "flat",
+      "symbol": "SOLUSDT-PERP",
+      "avgEntry": 0,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777808394351
+    },
+    "SKYAIUSDT-PERP": {
+      "size": 0,
+      "side": "flat",
+      "symbol": "SKYAIUSDT-PERP",
+      "avgEntry": 0,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777808394351
+    },
+    "DOGEUSDT-PERP": {
+      "size": 0,
+      "side": "flat",
+      "symbol": "DOGEUSDT-PERP",
+      "avgEntry": 0,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777808394351
+    },
+    "UBUSDT-PERP": {
+      "size": 0,
+      "side": "flat",
+      "symbol": "UBUSDT-PERP",
+      "avgEntry": 0,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777808394351
+    },
+    "BNBUSDT-PERP": {
+      "size": 0.0485,
+      "side": "short",
+      "symbol": "BNBUSDT-PERP",
+      "avgEntry": 618.8,
+      "unrealizedPnl": 0,
+      "lastUpdate": 1777807904447
     }
   },
-  "lastBarCloseTime": 1777805914915,
-  "timestamp": 1777805891647
+  "lastBarCloseTime": 1777808393886,
+  "timestamp": 1777808395951
 }

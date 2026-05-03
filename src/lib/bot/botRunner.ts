@@ -474,6 +474,8 @@ export class BotRunner {
       if (now < (this.cooldownUntil.get(symbol) || 0)) return;
       if (this.isOverTradeLimit(symbol)) return;
       if (now - (this.lastEntryAt.get(symbol) || 0) < (this.config.risk.minTradeIntervalMs || 15000)) return;
+      // Check executor-level symbol blacklist (e.g. -5018 notional limit)
+      if ((this.executor as any).isSymbolBlacklisted?.(this.toPerpSymbol(symbol).replace("-PERP", ""))) return;
       
       // Same-direction cooldown
       if (this.config.risk.sameDirectionCooldownMinutes && this.lastTradeSide.get(symbol) === signal.type) {
