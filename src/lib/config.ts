@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defaultWatermellonConfig } from "./spec";
+import { defaultWatermellonConfig } from "./types";
 import type {
   AppConfig,
   EmaCrossConfig,

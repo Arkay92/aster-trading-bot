@@ -113,6 +113,16 @@ export type EmaCrossConfig = {
   rsiMaxShort: number;
 };
 
+export const defaultWatermellonConfig: WatermellonConfig = {
+  timeframeMs: 30_000,
+  emaFastLen: 8,
+  emaMidLen: 21,
+  emaSlowLen: 48,
+  rsiLength: 14,
+  rsiMinLong: 42,
+  rsiMaxShort: 58,
+};
+
 export type RsiReversionConfig = {
   timeframeMs: number;
   rsiLength: number;

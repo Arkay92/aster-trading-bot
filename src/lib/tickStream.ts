@@ -99,17 +99,17 @@ export class AsterTickStream {
     private readonly pairSymbols: string[],
     private readonly parser: MessageParser = defaultParser,
     private readonly subscribePayloadBuilder: (pairs: string[]) => unknown = defaultSubscribePayload,
-  ) {}
+  ) { }
 
   async start(): Promise<void> {
     await this.stop();
-    
+
     // Construct URL for multiple streams if possible, or use base /ws
     // For AsterDEX, we'll use the base /ws and send a SUBSCRIBE command
     const wsUrl = this.url.endsWith("/ws") ? this.url : `${this.url}/ws`;
-    
+
     console.log(`[TickStream] Connecting to ${wsUrl} for ${this.pairSymbols.length} pairs...`);
-    
+
     this.ws = new WebSocket(wsUrl, {
       headers: {
         "User-Agent": "Watermellon-bot/0.1",
@@ -121,10 +121,10 @@ export class AsterTickStream {
       this.reconnectAttempts = 0;
       this.lastMessageTime = Date.now();
       this.startHeartbeat();
-      
+
       const payload = this.subscribePayloadBuilder(this.pairSymbols);
       console.log(`[TickStream] Subscribing to:`, JSON.stringify(payload, null, 2));
-      
+
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify(payload));
       }
@@ -134,7 +134,7 @@ export class AsterTickStream {
       this.lastMessageTime = Date.now();
       this.messageCount++;
       const message = raw.toString();
-      
+
       try {
         const parsed = JSON.parse(message);
         // Subscription confirmation payloads are typically { result: null, id: 1 }.
@@ -155,10 +155,10 @@ export class AsterTickStream {
       } catch {
         // Not JSON trade data
       }
-      
+
       const ticks = this.parser(raw);
       if (!ticks || ticks.length === 0) return;
-      
+
       ticks.forEach((tick) => {
         // Only emit if it's one of our watched symbols
         // We normalize to ASTERUSDT-PERP format
@@ -228,10 +228,10 @@ export class AsterTickStream {
       console.error(`[TickStream] Max reconnect attempts reached`);
       return;
     }
-    
+
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
     console.log(`[TickStream] Scheduling reconnect in ${delay}ms (attempt ${this.reconnectAttempts + 1})`);
-    
+
     this.reconnectTimeout = setTimeout(() => {
       this.reconnectTimeout = null;
       this.reconnect();
