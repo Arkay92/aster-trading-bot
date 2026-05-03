@@ -148,6 +148,49 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
     return symbol.toUpperCase().replace(/-PERP$/, "");
   }
 
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private isRetryableOrderError(error: unknown): boolean {
+    const msg = error instanceof Error ? error.message : String(error);
+    const lower = msg.toLowerCase();
+    if (msg.includes("-5018") || msg.includes("-2019") || msg.includes("-2027")) return false;
+    if (lower.includes("insufficient") || lower.includes("notional") || lower.includes("margin")) return false;
+    return (
+      lower.includes("timeout") ||
+      lower.includes("temporar") ||
+      lower.includes("network") ||
+      lower.includes("socket") ||
+      lower.includes("econnreset") ||
+      lower.includes("rate limit") ||
+      lower.includes("429") ||
+      /\b5\d\d\b/.test(lower)
+    );
+  }
+
+  private async withOrderRetry<T>(label: string, operation: () => Promise<T>): Promise<T> {
+    const executionConfig = this.config?.risk?.execution;
+    const maxRetries = Math.max(0, executionConfig?.maxOrderRetries ?? 2);
+    const baseDelay = executionConfig?.orderRetryBaseDelayMs ?? 250;
+    const maxDelay = executionConfig?.orderRetryMaxDelayMs ?? 5_000;
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        if (attempt >= maxRetries || !this.isRetryableOrderError(error)) break;
+        const delay = Math.min(maxDelay, baseDelay * Math.pow(2, attempt));
+        this.persist({ type: "info", message: `${label} failed; retrying`, payload: { attempt: attempt + 1, nextAttempt: attempt + 2, delayMs: delay, error: String(error) } });
+        await this.sleep(delay);
+      }
+    }
+
+    throw lastError;
+  }
+
   async enterLong(order: TradeInstruction): Promise<void> {
     await this.smartExecute(order, "BUY");
   }
@@ -183,16 +226,18 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
     if (executionConfig?.useLimitOrders) {
       try {
         this.persist({ type: "info", message: `Attempting LIMIT entry on ${symbol}` });
-        const res = await SignedRequestLock.run(async () => 
-          this.v3.newOrder({
-            symbol,
-            side,
-            type: "LIMIT",
-            quantity: order.size.toString(),
-            price: order.price.toString(),
-            timeInForce: "GTC",
-            ...(this.hedgeMode ? { positionSide: side === "BUY" ? "LONG" : "SHORT" } : {}),
-          })
+        const res = await this.withOrderRetry(`LIMIT entry ${symbol}`, () =>
+          SignedRequestLock.run(async () => 
+            this.v3.newOrder({
+              symbol,
+              side,
+              type: "LIMIT",
+              quantity: order.size.toString(),
+              price: order.price.toString(),
+              timeInForce: "GTC",
+              ...(this.hedgeMode ? { positionSide: side === "BUY" ? "LONG" : "SHORT" } : {}),
+            })
+          )
         );
         
         const orderId = (res as any).orderId;
@@ -208,7 +253,7 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
 
         if (isStillOpen) {
           this.persist({ type: "info", message: `LIMIT order timed out, falling back to MARKET` });
-          await SignedRequestLock.run(() => this.v3.cancelOrder(symbol, orderId));
+          await this.withOrderRetry(`Cancel stale LIMIT ${symbol}`, () => SignedRequestLock.run(() => this.v3.cancelOrder(symbol, orderId)));
           // Fall through to MARKET
         } else {
           this.persist({ type: "info", message: `LIMIT order FILLED on ${symbol}` });
@@ -221,15 +266,17 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
 
     // 3. Market Order
     try {
-      await SignedRequestLock.run(async () =>
-        this.v3.newOrder({
-          symbol: symbol,
-          side: side,
-          type: "MARKET",
-          quantity: order.size.toString(),
-          priceHint: order.price,
-          ...(this.hedgeMode ? { positionSide: side === "BUY" ? "LONG" : "SHORT" } : {}),
-        }),
+      await this.withOrderRetry(`MARKET entry ${symbol}`, () =>
+        SignedRequestLock.run(async () =>
+          this.v3.newOrder({
+            symbol: symbol,
+            side: side,
+            type: "MARKET",
+            quantity: order.size.toString(),
+            priceHint: order.price,
+            ...(this.hedgeMode ? { positionSide: side === "BUY" ? "LONG" : "SHORT" } : {}),
+          }),
+        )
       );
       this.persist({ type: "enter", side: side === "BUY" ? "long" : "short", order });
     } catch (error) {
@@ -254,16 +301,18 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
       const side = positionAmt > 0 ? "SELL" : "BUY";
       const quantity = meta?.size ? Math.abs(Number(meta.size)).toString() : Math.abs(positionAmt).toString();
 
-      await SignedRequestLock.run(async () =>
-        this.v3.newOrder({
-          symbol: symbol,
-          side,
-          type: "MARKET",
-          quantity,
-          priceHint: Number(meta?.price || 0),
-          reduceOnly: "true",
-          ...(this.hedgeMode ? { positionSide: positionAmt > 0 ? "LONG" : "SHORT" } : {}),
-        }),
+      await this.withOrderRetry(`MARKET close ${symbol}`, () =>
+        SignedRequestLock.run(async () =>
+          this.v3.newOrder({
+            symbol: symbol,
+            side,
+            type: "MARKET",
+            quantity,
+            priceHint: Number(meta?.price || 0),
+            reduceOnly: "true",
+            ...(this.hedgeMode ? { positionSide: positionAmt > 0 ? "LONG" : "SHORT" } : {}),
+          }),
+        )
       );
 
       this.persist({ type: "close", reason, meta, timestamp: Date.now() });

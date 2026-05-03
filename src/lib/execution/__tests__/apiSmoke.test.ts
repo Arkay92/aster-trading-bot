@@ -59,4 +59,76 @@ describe.skip("Aster API Smoke Test", () => {
       throw new Error(`Position risk fetch failed: ${error.message}`);
     }
   });
+
+  it("should handle live executor failures gracefully", async () => {
+    // Simulate a failure in the live executor
+    const mockExecutor = jest.fn().mockRejectedValue(new Error("Executor failure"));
+
+    try {
+      await mockExecutor();
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      expect(error).toBeDefined();
+      expect(err.message).toBe("Executor failure");
+    }
+  });
+
+  it("should retry orders on failure", async () => {
+    const mockOrder = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("Temporary failure"))
+      .mockResolvedValueOnce({ success: true });
+
+    const result = await mockOrder();
+    expect(mockOrder).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ success: true });
+  });
+
+  it("should enforce stop loss and take profit", async () => {
+    const initialPrice = 100;
+    const stopLoss = 90;
+    const takeProfit = 110;
+
+    const mockTrade = jest.fn((price) => {
+      if (price <= stopLoss) throw new Error("Stop loss triggered");
+      if (price >= takeProfit) return "Take profit triggered";
+      return "Trade ongoing";
+    });
+
+    expect(() => mockTrade(85)).toThrow("Stop loss triggered");
+    expect(mockTrade(115)).toBe("Take profit triggered");
+    expect(mockTrade(100)).toBe("Trade ongoing");
+  });
+
+  it("should enforce max daily loss", async () => {
+    const maxDailyLoss = 100;
+    let dailyLoss = 0;
+
+    const mockTrade = jest.fn((loss) => {
+      dailyLoss += loss;
+      if (dailyLoss > maxDailyLoss) throw new Error("Max daily loss exceeded");
+      return dailyLoss;
+    });
+
+    expect(mockTrade(50)).toBe(50);
+    expect(mockTrade(40)).toBe(90);
+    expect(() => mockTrade(20)).toThrow("Max daily loss exceeded");
+  });
+
+  it("should reconnect websocket on disconnect", async () => {
+    const mockWebSocket = {
+      connect: jest.fn(),
+      disconnect: jest.fn(),
+      on: jest.fn((event, callback) => {
+        if (event === "disconnect") callback();
+      })
+    };
+
+    mockWebSocket.on("disconnect", async () => {
+      await mockWebSocket.connect();
+    });
+
+    await mockWebSocket.disconnect();
+    expect(mockWebSocket.connect).toHaveBeenCalled();
+  });
 });

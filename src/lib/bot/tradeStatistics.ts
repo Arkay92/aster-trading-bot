@@ -11,13 +11,14 @@ export type TradeRecord = {
   pnlPercent: number;
   reason: string;
   leverage: number;
+  strategy?: string;
 };
 
 export class TradeStatistics {
   private trades: TradeRecord[] = [];
   private currentTrades = new Map<string, Partial<TradeRecord>>();
 
-  startTrade(symbol: string, side: "long" | "short", entryPrice: number, size: number, leverage: number): void {
+  startTrade(symbol: string, side: "long" | "short", entryPrice: number, size: number, leverage: number, strategy?: string): void {
     this.currentTrades.set(symbol, {
       id: `trade-${Date.now()}-${symbol}`,
       symbol,
@@ -26,6 +27,7 @@ export class TradeStatistics {
       entryTime: Date.now(),
       size,
       leverage,
+      strategy,
     });
   }
 
@@ -56,8 +58,12 @@ export class TradeStatistics {
     return (priceDiff / trade.entryPrice) * 100 * trade.leverage;
   }
 
-  getStats() {
-    if (this.trades.length === 0) {
+  getStats(strategy?: string) {
+    return this.calculateStats(strategy ? this.trades.filter((t) => t.strategy === strategy) : this.trades);
+  }
+
+  private calculateStats(trades: TradeRecord[]) {
+    if (trades.length === 0) {
       return {
         totalTrades: 0,
         winningTrades: 0,
@@ -74,24 +80,24 @@ export class TradeStatistics {
       };
     }
 
-    const winningTrades = this.trades.filter(t => t.pnl > 0);
-    const losingTrades = this.trades.filter(t => t.pnl < 0);
+    const winningTrades = trades.filter(t => t.pnl > 0);
+    const losingTrades = trades.filter(t => t.pnl < 0);
 
-    const totalPnL = this.trades.reduce((sum, t) => sum + t.pnl, 0);
+    const totalPnL = trades.reduce((sum, t) => sum + t.pnl, 0);
     const totalWin = winningTrades.reduce((sum, t) => sum + t.pnl, 0);
     const totalLoss = Math.abs(losingTrades.reduce((sum, t) => sum + t.pnl, 0));
     
     const avgWin = winningTrades.length > 0 ? totalWin / winningTrades.length : 0;
     const avgLoss = losingTrades.length > 0 ? totalLoss / losingTrades.length : 0;
 
-    const winRate = winningTrades.length / this.trades.length;
+    const winRate = winningTrades.length / trades.length;
     const expectancy = (winRate * avgWin) - ((1 - winRate) * avgLoss);
 
     let peak = 0;
     let maxDrawdown = 0;
     let runningPnL = 0;
 
-    for (const trade of this.trades) {
+    for (const trade of trades) {
       runningPnL += trade.pnl;
       if (runningPnL > peak) peak = runningPnL;
       const drawdown = peak - runningPnL;
@@ -102,7 +108,7 @@ export class TradeStatistics {
     const largestLoss = losingTrades.length > 0 ? Math.min(...losingTrades.map(t => t.pnl)) : 0;
 
     return {
-      totalTrades: this.trades.length,
+      totalTrades: trades.length,
       winningTrades: winningTrades.length,
       losingTrades: losingTrades.length,
       winRate: winRate * 100,
@@ -119,5 +125,15 @@ export class TradeStatistics {
 
   getRecentTrades(limit = 10): TradeRecord[] {
     return this.trades.slice(-limit);
+  }
+
+  getStrategyStats(): Record<string, ReturnType<TradeStatistics["getStats"]>> {
+    const strategies = new Set(this.trades.map((trade) => trade.strategy || "unknown"));
+    const result: Record<string, ReturnType<TradeStatistics["getStats"]>> = {};
+    for (const strategy of strategies) {
+      const trades = this.trades.filter((trade) => (trade.strategy || "unknown") === strategy);
+      result[strategy] = this.calculateStats(trades);
+    }
+    return result;
   }
 }

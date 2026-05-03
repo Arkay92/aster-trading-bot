@@ -67,4 +67,11 @@ export class StatePersistence {
       console.error("[StatePersistence] Failed to clear state", error);
     }
   }
+
+  applyRiskLimits(state: { positions: Map<string, LocalPositionState>; dailyLoss: number }, maxDailyLoss: number): void {
+    if (state.dailyLoss > maxDailyLoss) {
+      console.error("[StatePersistence] Max daily loss exceeded. Halting trading.");
+      throw new Error("Max daily loss exceeded");
+    }
+  }
 }

@@ -1,0 +1,5 @@
+# Exclude unnecessary files from deployment
+.git
+logs/
+data/bot-state.json
+tsconfig.tsbuildinfo

@@ -80,5 +80,23 @@ export class OrderTracker {
   clearAll(): void {
     this.pendingOrders.clear();
   }
+
+  async retryOrder(orderId: string, retryFn: () => Promise<void>, maxRetries = 3): Promise<void> {
+    let attempts = 0;
+    while (attempts < maxRetries) {
+      try {
+        await retryFn();
+        console.log(`[OrderTracker] Order ${orderId} succeeded after ${attempts + 1} attempt(s)`);
+        return;
+      } catch (error) {
+        attempts++;
+        console.warn(`[OrderTracker] Retry ${attempts} for order ${orderId} failed:`, error);
+        if (attempts >= maxRetries) {
+          console.error(`[OrderTracker] Order ${orderId} failed after ${maxRetries} retries`);
+          throw error;
+        }
+      }
+    }
+  }
 }
 

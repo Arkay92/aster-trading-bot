@@ -58,4 +58,18 @@ describe("TradeStatistics", () => {
     // Peak was 10. Current is 10 - 5 - 10 = -5. Drawdown = 10 - (-5) = 15.
     expect(report.maxDrawdown).toBe(15);
   });
+
+  it("should calculate performance metrics by strategy", () => {
+    stats.startTrade("BTCUSDT", "long", 100, 1, 1, "ema-cross");
+    stats.closeTrade("BTCUSDT", 110, "win");
+
+    stats.startTrade("ETHUSDT", "short", 100, 1, 1, "rsi-reversion");
+    stats.closeTrade("ETHUSDT", 110, "loss");
+
+    const strategyStats = stats.getStrategyStats();
+    expect(strategyStats["ema-cross"].totalTrades).toBe(1);
+    expect(strategyStats["ema-cross"].totalPnL).toBe(10);
+    expect(strategyStats["rsi-reversion"].totalTrades).toBe(1);
+    expect(strategyStats["rsi-reversion"].totalPnL).toBe(-10);
+  });
 });

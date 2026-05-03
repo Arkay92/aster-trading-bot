@@ -43,6 +43,7 @@ export class RestPoller {
   private onError?: (error: Error) => void;
   private lastSuccessLog: number = 0;
   private readonly v3: AsterV3Client;
+  private reconnectAttempts = 0;
 
   constructor(credentials: Credentials) {
     this.symbols = credentials.pairSymbols.map((s) => this.normalizeSymbol(s));
@@ -239,6 +240,24 @@ export class RestPoller {
         const fallbackErr = fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError));
         console.error(`[RestPoller] Both balance endpoints failed:`);
         this.onError?.(fallbackErr);
+      }
+    }
+  }
+
+  async handleWebSocketReconnect(reconnectFn: () => Promise<void>, maxReconnects = 5): Promise<void> {
+    while (this.reconnectAttempts < maxReconnects) {
+      try {
+        await reconnectFn();
+        console.log(`[RestPoller] WebSocket reconnected successfully after ${this.reconnectAttempts + 1} attempt(s)`);
+        this.reconnectAttempts = 0; // Reset attempts on success
+        return;
+      } catch (error) {
+        this.reconnectAttempts++;
+        console.warn(`[RestPoller] WebSocket reconnect attempt ${this.reconnectAttempts} failed:`, error);
+        if (this.reconnectAttempts >= maxReconnects) {
+          console.error(`[RestPoller] WebSocket failed to reconnect after ${maxReconnects} attempts`);
+          throw error;
+        }
       }
     }
   }

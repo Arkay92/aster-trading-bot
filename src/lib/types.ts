@@ -153,6 +153,9 @@ export type ExecutionConfig = {
   maxEntrySlippagePct: number; // e.g. 0.1 for 0.1%
   limitOrderTimeoutMs: number; // e.g. 500ms
   useLimitOrders: boolean;
+  maxOrderRetries?: number;
+  orderRetryBaseDelayMs?: number;
+  orderRetryMaxDelayMs?: number;
 };
 
 export type RiskConfig = {
@@ -174,6 +177,8 @@ export type RiskConfig = {
   quietSignalLogs?: boolean; // Suppress noisy non-actionable signal logs
   strategyOwnershipTimeoutBars?: number; // Allow strategy takeover after N bars
   maxDailyLossUsdt?: number; // Hard stop once realized daily loss exceeds this
+  maxDrawdownUsdt?: number; // Hard stop once daily realized drawdown exceeds this
+  maxDrawdownPct?: number; // Hard stop once daily realized drawdown exceeds this percentage of starting balance
   maxConsecutiveLosses?: number; // Hard stop after N losing closes in a row
   minTradeIntervalMs?: number; // Per-symbol minimum time between new entries
   riskPerTradePct?: number;

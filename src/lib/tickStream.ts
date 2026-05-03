@@ -90,6 +90,8 @@ export class AsterTickStream {
   private readonly wsTimeoutMs = 300_000; // 5 minutes
   private reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 10;
+  private intentionalClose = false;
+  private reconnecting = false;
   private messageCount = 0;
   private emittedTickCount = 0;
   private droppedTickCount = 0;
@@ -104,6 +106,7 @@ export class AsterTickStream {
 
   async start(): Promise<void> {
     await this.stop();
+    this.intentionalClose = false;
 
     // Construct URL for multiple streams if possible, or use base /ws
     // For AsterDEX, we'll use the base /ws and send a SUBSCRIBE command
@@ -197,7 +200,8 @@ export class AsterTickStream {
     this.ws.on("close", (code, reason) => {
       console.log(`[TickStream] WebSocket closed: code=${code}, reason=${reason.toString()}`);
       this.stopHeartbeat();
-      this.scheduleReconnect();
+      if (this.ws?.readyState === WebSocket.CLOSED || this.ws?.readyState === WebSocket.CLOSING) this.ws = null;
+      if (!this.intentionalClose) this.scheduleReconnect();
       this.emitter.emit("close");
     });
   }
@@ -248,13 +252,20 @@ export class AsterTickStream {
   }
 
   private async reconnect(): Promise<void> {
+    if (this.reconnecting) return;
+    this.reconnecting = true;
     this.reconnectAttempts++;
-    console.log(`[TickStream] Reconnecting... (attempt ${this.reconnectAttempts})`);
-    await this.stop();
-    await this.start();
+    try {
+      console.log(`[TickStream] Reconnecting... (attempt ${this.reconnectAttempts})`);
+      await this.stop();
+      await this.start();
+    } finally {
+      this.reconnecting = false;
+    }
   }
 
   async stop(): Promise<void> {
+    this.intentionalClose = true;
     this.stopHeartbeat();
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
@@ -262,7 +273,8 @@ export class AsterTickStream {
     }
     await new Promise<void>((resolve) => {
       if (!this.ws) return resolve();
-      this.ws.once("close", () => resolve());
+      const ws = this.ws;
+      ws.once("close", () => resolve());
       this.ws.close();
       this.ws = null;
     });

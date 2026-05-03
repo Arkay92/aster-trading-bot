@@ -553,10 +553,11 @@ export class BotRunner {
       this.dynamicStopBySymbol.delete(symbol);
       this.partialProfitTaken.delete(symbol);
       this.stateManager.updateLocalState(symbol, { side, size: order.size, symbol, avgEntry: order.price });
-      this.tradeStats.startTrade(symbol, side, order.price, order.size, order.leverage);
+      this.tradeStats.startTrade(symbol, side, order.price, order.size, order.leverage, strategyType);
       this.lastEntryAt.set(symbol, Date.now());
       this.lastTradeSide.set(symbol, side);
       this.lastTradeAt.set(symbol, Date.now());
+      this.recordTradeTimestamp(symbol);
       this.recordFlip(order.timestamp);
       this.saveState();
       this.emitter.emit("position", pos);
@@ -572,7 +573,6 @@ export class BotRunner {
     this.positions.set(symbol, { side: "flat", size: 0, symbol });
     const last = this.tradeStats.getRecentTrades(1)[0];
     if (last?.pnl < 0) {
-      this.consecutiveLosses++;
       if (this.consecutiveLosses >= 2) {
         this.cooldownUntil.set(symbol, Date.now() + 30 * 60000); // Hard 30m pause on streak
         this.log(`Hard 30m pause for ${symbol} due to 2 consecutive losses.`);
@@ -580,8 +580,6 @@ export class BotRunner {
         this.cooldownUntil.set(symbol, Date.now() + this.config.risk.cooldownMinutesAfterLoss * 60000);
         this.log(`Cooldown active for ${symbol} due to loss.`);
       }
-    } else {
-      this.consecutiveLosses = 0;
     }
     this.partialProfitTaken.delete(symbol);
     this.saveState();
@@ -775,6 +773,7 @@ export class BotRunner {
     this.riskDayKey = this.getRiskDayKey();
     this.dailyStartBalance = this.usdtBalance;
     this.dailyRealizedPnl = 0;
+    this.dailyPeakPnl = 0;
     this.consecutiveLosses = 0;
     this.riskHalted = false;
   }
@@ -785,17 +784,42 @@ export class BotRunner {
     this.lastRiskProcessedTradeId = last.id;
     this.dailyRealizedPnl += last.pnl;
     if (last.pnl < 0) this.consecutiveLosses++; else this.consecutiveLosses = 0;
+    this.dailyPeakPnl = Math.max(this.dailyPeakPnl, this.dailyRealizedPnl);
+    const currentDrawdown = Math.max(0, this.dailyPeakPnl - this.dailyRealizedPnl);
     
     let maxDailyLossUsdt = this.config.risk.maxDailyLossUsdt || 999999;
     if (this.config.risk.maxDailyLossPct && this.dailyStartBalance > 0) {
       const impliedMaxLoss = this.dailyStartBalance * (this.config.risk.maxDailyLossPct / 100);
       if (impliedMaxLoss < maxDailyLossUsdt) maxDailyLossUsdt = impliedMaxLoss;
     }
-    
-    if (this.dailyRealizedPnl <= -maxDailyLossUsdt || this.consecutiveLosses >= (this.config.risk.maxConsecutiveLosses || 999)) {
-      this.riskHalted = true;
-      this.log(`Trading halted for the day. Daily PnL: ${this.dailyRealizedPnl}, Consec Losses: ${this.consecutiveLosses}`);
+
+    let maxDrawdownUsdt = this.config.risk.maxDrawdownUsdt || 999999;
+    if (this.config.risk.maxDrawdownPct && this.dailyStartBalance > 0) {
+      const impliedMaxDrawdown = this.dailyStartBalance * (this.config.risk.maxDrawdownPct / 100);
+      if (impliedMaxDrawdown < maxDrawdownUsdt) maxDrawdownUsdt = impliedMaxDrawdown;
     }
+    
+    if (
+      this.dailyRealizedPnl <= -maxDailyLossUsdt ||
+      currentDrawdown >= maxDrawdownUsdt ||
+      this.consecutiveLosses >= (this.config.risk.maxConsecutiveLosses || 999)
+    ) {
+      this.riskHalted = true;
+      this.log(`Trading halted for the day. Daily PnL: ${this.dailyRealizedPnl}, Drawdown: ${currentDrawdown}, Consec Losses: ${this.consecutiveLosses}`);
+    }
+  }
+  getPerformanceMetrics() {
+    return {
+      overall: this.tradeStats.getStats(),
+      byStrategy: this.tradeStats.getStrategyStats(),
+      daily: {
+        day: this.riskDayKey,
+        realizedPnl: this.dailyRealizedPnl,
+        peakPnl: this.dailyPeakPnl,
+        drawdown: Math.max(0, this.dailyPeakPnl - this.dailyRealizedPnl),
+        halted: this.riskHalted,
+      },
+    };
   }
   private log(msg: string, payload?: any) { KeyManager.safeLog(`[BotRunner] ${msg}`, payload); }
 }

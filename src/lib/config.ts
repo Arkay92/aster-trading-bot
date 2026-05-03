@@ -105,6 +105,8 @@ const envSchema = z.object({
   MAX_POSITIONS_EMA_CROSS: z.coerce.number().optional(),
   MAX_POSITIONS_RSI_REVERSION: z.coerce.number().optional(),
   MAX_DAILY_LOSS_USDT: z.coerce.number().positive().optional(),
+  MAX_DRAWDOWN_USDT: z.coerce.number().positive().optional(),
+  MAX_DRAWDOWN_PCT: z.coerce.number().positive().optional(),
   MAX_CONSECUTIVE_LOSSES: z.coerce.number().int().positive().optional(),
   MIN_TRADE_INTERVAL_MS: z.coerce.number().int().positive().optional(),
   USE_MARKET_REGIME_FILTER: envBoolean.optional(),
@@ -129,6 +131,9 @@ const envSchema = z.object({
   REQUIRE_SIGNAL_CONFIRMATION: envBoolean.optional(),
   SAME_DIRECTION_COOLDOWN_MINUTES: z.coerce.number().int().positive().optional(),
   MAX_DAILY_LOSS_PCT: z.coerce.number().positive().optional(),
+  ORDER_MAX_RETRIES: z.coerce.number().int().min(0).optional(),
+  ORDER_RETRY_BASE_DELAY_MS: z.coerce.number().int().positive().optional(),
+  ORDER_RETRY_MAX_DELAY_MS: z.coerce.number().int().positive().optional(),
   MAX_DIRECTIONAL_POSITIONS: z.coerce.number().int().positive().optional(),
 });
 
@@ -231,6 +236,8 @@ export const loadConfig = (overrides?: Partial<AppConfig>): AppConfig => {
     quietSignalLogs: env.QUIET_SIGNAL_LOGS ?? true,
     strategyOwnershipTimeoutBars: env.STRATEGY_OWNERSHIP_TIMEOUT_BARS ?? 6,
     maxDailyLossUsdt: env.MAX_DAILY_LOSS_USDT ?? undefined,
+    maxDrawdownUsdt: env.MAX_DRAWDOWN_USDT ?? undefined,
+    maxDrawdownPct: env.MAX_DRAWDOWN_PCT ?? undefined,
     maxConsecutiveLosses: env.MAX_CONSECUTIVE_LOSSES ?? 2,
     minTradeIntervalMs: env.MIN_TRADE_INTERVAL_MS ?? 900_000,
     useMarketRegimeFilter: env.USE_MARKET_REGIME_FILTER ?? true,
@@ -263,6 +270,14 @@ export const loadConfig = (overrides?: Partial<AppConfig>): AppConfig => {
     requireSignalConfirmation: env.REQUIRE_SIGNAL_CONFIRMATION ?? true,
     sameDirectionCooldownMinutes: env.SAME_DIRECTION_COOLDOWN_MINUTES ?? 60,
     maxDailyLossPct: env.MAX_DAILY_LOSS_PCT ?? 2.0,
+    execution: {
+      maxEntrySlippagePct: 0.15,
+      limitOrderTimeoutMs: 500,
+      useLimitOrders: false,
+      maxOrderRetries: env.ORDER_MAX_RETRIES ?? 2,
+      orderRetryBaseDelayMs: env.ORDER_RETRY_BASE_DELAY_MS ?? 250,
+      orderRetryMaxDelayMs: env.ORDER_RETRY_MAX_DELAY_MS ?? 5_000,
+    },
   };
 
   const isPaper = env.PAPER_TRADING ?? false;
