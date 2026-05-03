@@ -1,4 +1,4 @@
-import type { TradeInstruction, ExecutionAdapter, Credentials } from "../types";
+import type { TradeInstruction, ExecutionAdapter, Credentials, Tick } from "../types";
 import { SignedRequestLock } from "./signedRequestLock";
 import { AsterV3Client } from "./asterV3Client";
 
@@ -7,7 +7,8 @@ import { AsterV3Client } from "./asterV3Client";
  */
 export type LogEntry =
   | { type: "enter"; side: "long" | "short"; order: TradeInstruction }
-  | { type: "close"; reason: string; meta?: Record<string, unknown>; timestamp: number };
+  | { type: "close"; reason: string; meta?: Record<string, unknown>; timestamp: number }
+  | { type: "info"; message: string; payload?: any };
 
 export abstract class BaseExecutor {
   protected history: LogEntry[] = [];
@@ -15,9 +16,9 @@ export abstract class BaseExecutor {
 
   protected persist(entry: LogEntry) {
     this.history.unshift(entry);
-    const typeLabel = entry.type === "enter" ? `ENTER ${entry.side.toUpperCase()}` : "CLOSE";
-    const payload = entry.type === "enter" ? entry.order : entry;
-    console.log(`[${this.label}] ${typeLabel}`, payload);
+    const typeLabel = entry.type === "enter" ? `ENTER ${entry.side.toUpperCase()}` : entry.type.toUpperCase();
+    const payload = entry.type === "enter" ? entry.order : (entry.type === "info" ? entry.payload : entry);
+    console.log(`[${this.label}] ${typeLabel}${entry.type === "info" ? ": " + entry.message : ""}`, payload);
   }
 
   get logs(): LogEntry[] {
@@ -30,6 +31,15 @@ export abstract class BaseExecutor {
  */
 export class DryRunExecutor extends BaseExecutor implements ExecutionAdapter {
   protected readonly label = "DryRun";
+  private lastTicks = new Map<string, Tick>();
+
+  updateTick(tick: Tick) {
+    this.lastTicks.set(tick.symbol, tick);
+  }
+
+  getCurrentTick(symbol: string): Tick | null {
+    return this.lastTicks.get(symbol) || null;
+  }
 
   async enterLong(order: TradeInstruction): Promise<void> {
     this.persist({ type: "enter", side: "long", order });
@@ -51,11 +61,20 @@ export class PaperExecutor extends BaseExecutor implements ExecutionAdapter {
   protected readonly label = "PaperTrading";
   private balance: number;
   private currentPosition: { side: "long" | "short"; size: number; entryPrice: number } | null = null;
+  private lastTicks = new Map<string, Tick>();
   
   constructor(initialBalance: number) {
     super();
     this.balance = initialBalance;
     console.log(`[PaperTrading] Initialized with virtual balance: ${this.balance} USDT`);
+  }
+
+  updateTick(tick: Tick) {
+    this.lastTicks.set(tick.symbol, tick);
+  }
+
+  getCurrentTick(symbol: string): Tick | null {
+    return this.lastTicks.get(symbol) || null;
   }
 
   async enterLong(order: TradeInstruction): Promise<void> {
@@ -98,15 +117,27 @@ export class PaperExecutor extends BaseExecutor implements ExecutionAdapter {
 
 /**
  * Live Executor: Real trade execution against Aster V3 API.
+ * Features: Slippage Guard & Limit-with-Market Fallback
  */
-export class LiveExecutor implements ExecutionAdapter {
+export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
+  protected readonly label = "LiveExecutor";
   private readonly v3: AsterV3Client;
   private readonly shouldSetLeverage: boolean;
   private leverageSignatureBroken = false;
+  private lastTicks = new Map<string, Tick>();
 
-  constructor(credentials: Credentials) {
+  constructor(credentials: Credentials, private readonly config?: any) {
+    super();
     this.v3 = new AsterV3Client(credentials);
     this.shouldSetLeverage = (process.env.SET_LEVERAGE_ON_ORDER || "false").toLowerCase() === "true";
+  }
+
+  updateTick(tick: Tick) {
+    this.lastTicks.set(tick.symbol, tick);
+  }
+
+  getCurrentTick(symbol: string): Tick | null {
+    return this.lastTicks.get(symbol) || null;
   }
 
   private normalizeSymbol(symbol: string): string {
@@ -114,184 +145,135 @@ export class LiveExecutor implements ExecutionAdapter {
   }
 
   async enterLong(order: TradeInstruction): Promise<void> {
-    const symbol = this.normalizeSymbol(order.symbol);
-    await this.trySetLeverage(symbol, order.leverage);
-    try {
-      await SignedRequestLock.run(async () =>
-        this.v3.newOrder({
-          symbol: symbol,
-          side: "BUY",
-          type: "MARKET",
-          quantity: order.size.toString(),
-          priceHint: order.price,
-        }),
-      );
-    } catch (error) {
-      const errMessage = error instanceof Error ? error.message : String(error);
-      if (errMessage.includes("position side")) {
-        await SignedRequestLock.run(async () =>
-          this.v3.newOrder({
-            symbol: symbol,
-            side: "BUY",
-            type: "MARKET",
-            quantity: order.size.toString(),
-            priceHint: order.price,
-            positionSide: "LONG",
-          }),
-        );
-      } else if (errMessage.includes("Signature check failed")) {
-        throw new Error(
-          "Signature check failed on trade endpoint. Verify Aster account-side signer authorization for this wallet, API permissions/IP whitelist, and that account and signer match expected trading auth mode.",
-        );
-      } else {
-        const err = error instanceof Error ? { message: error.message, stack: error.stack } : error;
-        console.error(`[LiveExecutor] Failed to enter LONG on ${symbol}`, err);
-        throw error;
-      }
-    }
-    console.log(`[LiveExecutor] Entered LONG position: ${order.size} @ ${order.price} on ${symbol}`);
+    await this.smartExecute(order, "BUY");
   }
 
   async enterShort(order: TradeInstruction): Promise<void> {
+    await this.smartExecute(order, "SELL");
+  }
+
+  private async smartExecute(order: TradeInstruction, side: "BUY" | "SELL"): Promise<void> {
     const symbol = this.normalizeSymbol(order.symbol);
+    
+    // 1. Slippage Guard
+    const tick = this.getCurrentTick(order.symbol);
+    const executionConfig = this.config?.risk?.execution;
+    if (tick && executionConfig?.maxEntrySlippagePct) {
+      const slippage = Math.abs((tick.price - order.price) / order.price) * 100;
+      if (slippage > executionConfig.maxEntrySlippagePct) {
+        this.persist({ type: "info", message: `Entry blocked by slippage guard`, payload: { slippage: slippage.toFixed(4) + "%", max: executionConfig.maxEntrySlippagePct + "%" } });
+        throw new Error(`Slippage too high: ${slippage.toFixed(4)}%`);
+      }
+    }
+
     await this.trySetLeverage(symbol, order.leverage);
+
+    // 2. Limit-or-Market Fallback
+    if (executionConfig?.useLimitOrders) {
+      try {
+        this.persist({ type: "info", message: `Attempting LIMIT entry on ${symbol}` });
+        const res = await SignedRequestLock.run(async () => 
+          this.v3.newOrder({
+            symbol,
+            side,
+            type: "LIMIT",
+            quantity: order.size.toString(),
+            price: order.price.toString(),
+            timeInForce: "GTC",
+            positionSide: side === "BUY" ? "LONG" : "SHORT"
+          })
+        );
+        
+        const orderId = (res as any).orderId;
+        if (!orderId) throw new Error("No orderId returned from LIMIT order");
+
+        // Wait for fill
+        const timeout = executionConfig.limitOrderTimeoutMs || 500;
+        await new Promise(r => setTimeout(r, timeout));
+
+        // Check if filled
+        const openOrders = await SignedRequestLock.run(() => this.v3.getOpenOrders(symbol));
+        const isStillOpen = openOrders.some((o: any) => o.orderId === orderId);
+
+        if (isStillOpen) {
+          this.persist({ type: "info", message: `LIMIT order timed out, falling back to MARKET` });
+          await SignedRequestLock.run(() => this.v3.cancelOrder(symbol, orderId));
+          // Fall through to MARKET
+        } else {
+          this.persist({ type: "info", message: `LIMIT order FILLED on ${symbol}` });
+          return;
+        }
+      } catch (error) {
+        this.persist({ type: "info", message: `LIMIT entry failed, falling back to MARKET`, payload: String(error) });
+      }
+    }
+
+    // 3. Market Order
     try {
       await SignedRequestLock.run(async () =>
         this.v3.newOrder({
           symbol: symbol,
-          side: "SELL",
+          side: side,
           type: "MARKET",
           quantity: order.size.toString(),
           priceHint: order.price,
+          positionSide: (side === "BUY") ? "LONG" : "SHORT"
         }),
       );
+      this.persist({ type: "enter", side: side === "BUY" ? "long" : "short", order });
     } catch (error) {
-      const errMessage = error instanceof Error ? error.message : String(error);
-      if (errMessage.includes("position side")) {
-        await SignedRequestLock.run(async () =>
-          this.v3.newOrder({
-            symbol: symbol,
-            side: "SELL",
-            type: "MARKET",
-            quantity: order.size.toString(),
-            priceHint: order.price,
-            positionSide: "SHORT",
-          }),
-        );
-      } else if (errMessage.includes("Signature check failed")) {
-        throw new Error(
-          "Signature check failed on trade endpoint. Verify Aster account-side signer authorization for this wallet, API permissions/IP whitelist, and that account and signer match expected trading auth mode.",
-        );
-      } else {
-        const err = error instanceof Error ? { message: error.message, stack: error.stack } : error;
-        console.error(`[LiveExecutor] Failed to enter SHORT on ${symbol}`, err);
-        throw error;
-      }
+       console.error(`[LiveExecutor] Failed to enter ${side} on ${symbol}`, error);
+       throw error;
     }
-    console.log(`[LiveExecutor] Entered SHORT position: ${order.size} @ ${order.price} on ${symbol}`);
   }
 
   async closePosition(symbolArg: string, reason: string, meta?: Record<string, unknown>): Promise<void> {
     const symbol = this.normalizeSymbol(symbolArg);
     try {
       const position = await this.getCurrentPosition(symbol);
-      if (!position || position.positionAmt === "0") {
-        console.log("[LiveExecutor] No position to close");
-        return;
-      }
+      if (!position || position.positionAmt === "0") return;
 
       const positionAmt = parseFloat(position.positionAmt);
-      if (positionAmt === 0) {
-        console.log("[LiveExecutor] Position amount is zero");
-        return;
-      }
-
       const side = positionAmt > 0 ? "SELL" : "BUY";
-      const quantity = Math.abs(positionAmt).toString();
+      const quantity = meta?.size ? Math.abs(Number(meta.size)).toString() : Math.abs(positionAmt).toString();
 
-      try {
-        await SignedRequestLock.run(async () =>
-          this.v3.newOrder({
-            symbol: symbol,
-            side,
-            type: "MARKET",
-            quantity,
-            priceHint: Number(meta?.price || 0),
-            reduceOnly: "true"
-          }),
-        );
-      } catch (error) {
-        const err = error instanceof Error ? error.message : String(error);
-        if (err.includes("position side")) {
-          const positionSide = positionAmt > 0 ? "LONG" : "SHORT";
-          await SignedRequestLock.run(async () =>
-            this.v3.newOrder({
-              symbol: symbol,
-              side,
-              type: "MARKET",
-              quantity,
-              priceHint: Number(meta?.price || 0),
-              positionSide,
-              reduceOnly: "true",
-            }),
-          );
-        } else {
-          throw error;
-        }
-      }
+      await SignedRequestLock.run(async () =>
+        this.v3.newOrder({
+          symbol: symbol,
+          side,
+          type: "MARKET",
+          quantity,
+          priceHint: Number(meta?.price || 0),
+          reduceOnly: "true",
+          positionSide: positionAmt > 0 ? "LONG" : "SHORT"
+        }),
+      );
 
-      console.log(`[LiveExecutor] Closed position on ${symbol}: ${reason}`, { positionAmt, side, quantity, ...meta });
+      this.persist({ type: "close", reason, meta, timestamp: Date.now() });
     } catch (error) {
-      const err = error instanceof Error ? { message: error.message, stack: error.stack } : error;
-      console.error(`[LiveExecutor] Failed to close position on ${symbol}: ${reason}`, err);
+      console.error(`[LiveExecutor] Failed to close position on ${symbol}: ${reason}`, error);
       throw error;
     }
-  }
-
-  private async setLeverage(symbol: string, leverage: number): Promise<void> {
-    await SignedRequestLock.run(async () => this.v3.changeLeverage(symbol, leverage));
   }
 
   private async trySetLeverage(symbol: string, leverage: number): Promise<void> {
     if (!this.shouldSetLeverage || this.leverageSignatureBroken) return;
     try {
-      await this.setLeverage(symbol, leverage);
+      await SignedRequestLock.run(async () => this.v3.changeLeverage(symbol, leverage));
     } catch (error) {
       const err = error instanceof Error ? error.message : String(error);
-      if (err.includes("Signature check failed")) {
-        this.leverageSignatureBroken = true;
-        console.warn("[LiveExecutor] changeLeverage signature check failed; disabling leverage updates and continuing with order flow");
-        return;
-      }
-      console.warn(`[LiveExecutor] changeLeverage failed on ${symbol}: ${err}; continuing with order flow`);
+      if (err.includes("Signature check failed")) this.leverageSignatureBroken = true;
+      console.warn(`[LiveExecutor] changeLeverage failed on ${symbol}: ${err}`);
     }
   }
 
   private async getCurrentPosition(symbol: string): Promise<{ positionAmt: string; symbol: string; entryPrice?: string } | null> {
     try {
       const account = await SignedRequestLock.run(async () => this.v3.getAccount());
-      const position = account.positions?.find((p: { symbol: string; positionAmt: string; entryPrice?: string }) => p.symbol === symbol);
-      if (position && position.positionAmt !== "0") {
-        return {
-          positionAmt: position.positionAmt.toString(),
-          symbol: position.symbol,
-          entryPrice: position.entryPrice?.toString()
-        };
-      }
+      const position = account.positions?.find((p: any) => p.symbol === symbol);
+      if (position && position.positionAmt !== "0") return position;
       return null;
     } catch {
-      try {
-        const positions = await SignedRequestLock.run(async () => this.v3.getPositionRisk(symbol));
-        const position = positions.find((p: { symbol: string; positionAmt: string }) => p.symbol === symbol);
-        if (position && position.positionAmt !== "0") {
-          return {
-            positionAmt: position.positionAmt.toString(),
-            symbol: position.symbol,
-          };
-        }
-      } catch (fallbackError) {
-        console.error("[LiveExecutor] Failed to get position", fallbackError);
-      }
       return null;
     }
   }

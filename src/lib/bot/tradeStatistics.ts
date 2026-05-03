@@ -56,19 +56,7 @@ export class TradeStatistics {
     return (priceDiff / trade.entryPrice) * 100 * trade.leverage;
   }
 
-  getStats(): {
-    totalTrades: number;
-    winningTrades: number;
-    losingTrades: number;
-    winRate: number;
-    totalPnL: number;
-    avgWin: number;
-    avgLoss: number;
-    profitFactor: number;
-    maxDrawdown: number;
-    largestWin: number;
-    largestLoss: number;
-  } {
+  getStats() {
     if (this.trades.length === 0) {
       return {
         totalTrades: 0,
@@ -79,6 +67,7 @@ export class TradeStatistics {
         avgWin: 0,
         avgLoss: 0,
         profitFactor: 0,
+        expectancy: 0,
         maxDrawdown: 0,
         largestWin: 0,
         largestLoss: 0,
@@ -89,8 +78,14 @@ export class TradeStatistics {
     const losingTrades = this.trades.filter(t => t.pnl < 0);
 
     const totalPnL = this.trades.reduce((sum, t) => sum + t.pnl, 0);
-    const avgWin = winningTrades.length > 0 ? winningTrades.reduce((sum, t) => sum + t.pnl, 0) / winningTrades.length : 0;
-    const avgLoss = losingTrades.length > 0 ? Math.abs(losingTrades.reduce((sum, t) => sum + t.pnl, 0) / losingTrades.length) : 0;
+    const totalWin = winningTrades.reduce((sum, t) => sum + t.pnl, 0);
+    const totalLoss = Math.abs(losingTrades.reduce((sum, t) => sum + t.pnl, 0));
+    
+    const avgWin = winningTrades.length > 0 ? totalWin / winningTrades.length : 0;
+    const avgLoss = losingTrades.length > 0 ? totalLoss / losingTrades.length : 0;
+
+    const winRate = winningTrades.length / this.trades.length;
+    const expectancy = (winRate * avgWin) - ((1 - winRate) * avgLoss);
 
     let peak = 0;
     let maxDrawdown = 0;
@@ -110,11 +105,12 @@ export class TradeStatistics {
       totalTrades: this.trades.length,
       winningTrades: winningTrades.length,
       losingTrades: losingTrades.length,
-      winRate: (winningTrades.length / this.trades.length) * 100,
+      winRate: winRate * 100,
       totalPnL,
       avgWin,
       avgLoss,
-      profitFactor: avgLoss > 0 ? (avgWin * winningTrades.length) / (avgLoss * losingTrades.length) : avgWin > 0 ? Infinity : 0,
+      profitFactor: totalLoss > 0 ? totalWin / totalLoss : totalWin > 0 ? Infinity : 0,
+      expectancy,
       maxDrawdown,
       largestWin,
       largestLoss,

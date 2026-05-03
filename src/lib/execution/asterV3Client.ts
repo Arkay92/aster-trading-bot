@@ -6,8 +6,10 @@ type ReqMethod = "GET" | "POST" | "DELETE";
 export type V3OrderRequest = {
   symbol: string;
   side: "BUY" | "SELL";
-  type: "MARKET";
+  type: "MARKET" | "LIMIT";
   quantity: string;
+  price?: string;
+  timeInForce?: "GTC" | "IOC" | "FOK";
   priceHint?: number;
   positionSide?: "BOTH" | "LONG" | "SHORT";
   reduceOnly?: "true" | "false";
@@ -67,7 +69,7 @@ export class AsterV3Client {
     this.user = credentials.userAddress || this.signer;
   }
 
-  async newOrder(order: V3OrderRequest): Promise<unknown> {
+  async newOrder(order: V3OrderRequest): Promise<any> {
     const adjustedQty = await this.normalizeOrderQuantity(
       order.symbol,
       order.quantity,
@@ -80,9 +82,19 @@ export class AsterV3Client {
       type: order.type,
       quantity: adjustedQty,
     };
+    if (order.price) payload.price = order.price;
+    if (order.timeInForce) payload.timeInForce = order.timeInForce;
     if (order.positionSide) payload.positionSide = order.positionSide;
     if (order.reduceOnly) payload.reduceOnly = order.reduceOnly;
     return this.signedRequest("POST", "/fapi/v3/order", payload);
+  }
+
+  async cancelOrder(symbol: string, orderId: string): Promise<unknown> {
+    return this.signedRequest("DELETE", "/fapi/v3/order", { symbol, orderId });
+  }
+
+  async getOpenOrders(symbol: string): Promise<any[]> {
+    return this.signedRequest("GET", "/fapi/v3/openOrders", { symbol }) as Promise<any[]>;
   }
 
   async changeLeverage(symbol: string, leverage: number): Promise<unknown> {
@@ -102,6 +114,19 @@ export class AsterV3Client {
 
   async getAccount(): Promise<V3Account> {
     return this.signedRequest("GET", "/fapi/v3/accountWithJoinMargin", {}) as Promise<V3Account>;
+  }
+
+  async getPremiumIndex(symbol?: string): Promise<any> {
+    const qs = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+    const res = await fetch(`${this.baseUrl}/fapi/v3/premiumIndex${qs}`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  async get24hTickers(): Promise<any[]> {
+    const res = await fetch(`${this.baseUrl}/fapi/v3/ticker/24hr`);
+    if (!res.ok) throw new Error(await res.text());
+    return (await res.json()) as any[];
   }
 
   private async normalizeOrderQuantity(

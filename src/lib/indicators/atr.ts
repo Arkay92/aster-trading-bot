@@ -1,8 +1,12 @@
+/**
+ * ATR with Wilder's Smoothing (Industry Standard)
+ */
 export class ATR {
   private readonly length: number;
   private prevClose: number | null = null;
   private valueInternal: number | null = null;
-  private trSeed: number[] = [];
+  private trSum = 0;
+  private updateCount = 0;
 
   constructor(length = 14) {
     if (length < 1) {
@@ -14,22 +18,28 @@ export class ATR {
   update(high: number, low: number, close: number): number | null {
     if (this.prevClose === null) {
       this.prevClose = close;
+      // TR for first bar is just high - low
+      const tr = high - low;
+      this.trSum += tr;
+      this.updateCount = 1;
       return null;
     }
 
     const tr = Math.max(high - low, Math.abs(high - this.prevClose), Math.abs(low - this.prevClose));
     this.prevClose = close;
+    this.updateCount++;
 
     if (this.valueInternal === null) {
-      this.trSeed.push(tr);
-      if (this.trSeed.length < this.length) return null;
-      const sum = this.trSeed.reduce((a, b) => a + b, 0);
-      this.valueInternal = sum / this.length;
+      this.trSum += tr;
+      if (this.updateCount < this.length) return null;
+      
+      // Seed ATR with SMA of TR
+      this.valueInternal = this.trSum / this.length;
       return this.valueInternal;
     }
 
-    const alpha = 1 / this.length;
-    this.valueInternal = this.valueInternal * (1 - alpha) + tr * alpha;
+    // Wilder's Smoothing for ATR
+    this.valueInternal = (this.valueInternal * (this.length - 1) + tr) / this.length;
     return this.valueInternal;
   }
 
@@ -37,4 +47,3 @@ export class ATR {
     return this.valueInternal;
   }
 }
-

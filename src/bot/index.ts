@@ -6,6 +6,7 @@ dotenv.config({ path: resolve(process.cwd(), ".env.local") });
 dotenv.config({ path: resolve(process.cwd(), ".env") });
 import { BotRunner } from "@/lib/bot/botRunner";
 import { loadConfig } from "@/lib/config";
+import { AsterV3Client } from "@/lib/execution/asterV3Client";
 import { DryRunExecutor, LiveExecutor, PaperExecutor } from "@/lib/execution/executors";
 import { initFileLogging } from "@/lib/logging/fileLogger";
 import { BotLock } from "@/lib/runtime/botLock";
@@ -22,6 +23,26 @@ async function main() {
   }
 
   const config = loadConfig();
+
+  console.log("Fetching global 24h ticker data for pair ranking...");
+  try {
+    const client = new AsterV3Client(config.credentials);
+    const tickers = await client.get24hTickers();
+    const ranked = tickers
+      .filter(t => t.symbol.endsWith("USDT"))
+      .filter(t => Number(t.quoteVolume) > 5_000_000)
+      .filter(t => Math.abs(Number(t.priceChangePercent)) < 18)
+      .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume))
+      .slice(0, 8)
+      .map(t => `${t.symbol}-PERP`);
+    
+    if (ranked.length > 0) {
+      console.log(`✅ Dynamic Pair Ranking Success. Picked top ${ranked.length} high-liquidity pairs.`);
+      config.credentials.pairSymbols = ranked;
+    }
+  } catch (err) {
+    console.warn("⚠️ Failed to fetch dynamic pair ranking. Falling back to .env pairs.");
+  }
   
   // Safety warning for live mode
   if (config.mode === "live") {

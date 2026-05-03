@@ -3,6 +3,7 @@ export type Tick = {
   timestamp: number;
   price: number;
   size?: number;
+  side?: "buy" | "sell";
 };
 
 export type SyntheticBar = {
@@ -13,6 +14,8 @@ export type SyntheticBar = {
   low: number;
   close: number;
   volume: number;
+  buyVolume: number;
+  sellVolume: number;
 };
 
 export type IndicatorSnapshot = {
@@ -31,17 +34,32 @@ export type TrendSnapshot = {
   shortTrig: boolean;
 };
 
+export type MarketRegime = "trending" | "ranging" | "volatile" | "quiet";
+
+export type StructuralState = {
+  recentHigh: number;
+  recentLow: number;
+  lastBreakout: "up" | "down" | "none";
+  isWickRejection: boolean;
+};
+
+export type StrategyContext = {
+  regime: MarketRegime;
+  htfBias: "bullish" | "bearish" | "neutral";
+  structure: StructuralState;
+};
+
 export type StrategySignal =
   | {
       type: "long";
-      reason: "long-trigger" | "v1-long" | "v2-long";
+      reason: "long-trigger" | "v1-long" | "v2-long" | "short-trigger" | "v1-short" | "v2-short" | string;
       indicators: IndicatorSnapshot;
       trend: TrendSnapshot;
       system?: "v1" | "v2";
     }
   | {
       type: "short";
-      reason: "short-trigger" | "v1-short" | "v2-short";
+      reason: "long-trigger" | "v1-long" | "v2-long" | "short-trigger" | "v1-short" | "v2-short" | string;
       indicators: IndicatorSnapshot;
       trend: TrendSnapshot;
       system?: "v1" | "v2";
@@ -49,7 +67,7 @@ export type StrategySignal =
   | null;
 
 export type ExitSignal = {
-  reason: "rsi-flattening" | "volume-drop" | "opposite-signal" | "stop-loss" | "emergency-stop";
+  reason: "rsi-flattening" | "volume-drop" | "opposite-signal" | "stop-loss" | "emergency-stop" | string;
   details?: Record<string, unknown>;
 };
 
@@ -131,6 +149,12 @@ export type RsiReversionConfig = {
   emaTrendLen: number;
 };
 
+export type ExecutionConfig = {
+  maxEntrySlippagePct: number; // e.g. 0.1 for 0.1%
+  limitOrderTimeoutMs: number; // e.g. 500ms
+  useLimitOrders: boolean;
+};
+
 export type RiskConfig = {
   maxPositionSize: number;
   maxLeverage: number;
@@ -152,17 +176,31 @@ export type RiskConfig = {
   maxDailyLossUsdt?: number; // Hard stop once realized daily loss exceeds this
   maxConsecutiveLosses?: number; // Hard stop after N losing closes in a row
   minTradeIntervalMs?: number; // Per-symbol minimum time between new entries
+  riskPerTradePct?: number;
+  maxDirectionalPositions?: number;
+  // V3 Elite Risk Features
+  maxTradesPerHour?: number;
+  maxTradesPerSymbol?: number;
+  cooldownMinutesAfterLoss?: number;
+  htfBiasEnabled?: boolean;
+  htfTimeframeMs?: number;
+  requireRegimeMatching?: boolean;
+  partialTpPercent?: number; // e.g. 50
+  moveSlToBeAtR?: number; // e.g. 1.5
+  requireSignalConfirmation?: boolean;
+  sameDirectionCooldownMinutes?: number;
+  maxDailyLossPct?: number;
+  atrLength?: number;
+  atrStopMultiplier?: number;
+  atrTakeProfitR?: number;
+  moveStopToBreakevenR?: number;
   useMarketRegimeFilter?: boolean;
   regimeAdxThreshold?: number;
   requireStructureBreak?: boolean;
   structureLookbackBars?: number;
   requireVolumeSpike?: boolean;
   volumeSpikeMultiplier?: number;
-  atrLength?: number;
-  atrStopMultiplier?: number;
-  atrTakeProfitR?: number;
-  moveStopToBreakevenR?: number;
-  riskPerTradePct?: number;
+  execution?: ExecutionConfig;
 };
 
 export type StrategyType =
@@ -226,15 +264,16 @@ export type ExecutionAdapter = {
   enterLong(order: TradeInstruction): Promise<void>;
   enterShort(order: TradeInstruction): Promise<void>;
   closePosition(symbol: string, reason: string, meta?: Record<string, unknown>): Promise<void>;
+  getCurrentTick?(symbol: string): Tick | null;
 };
-export interface Indicator {
+export interface Indicator {
   update(value: number, ...args: number[]): number | null;
   readonly value: number | null;
   readonly isReady: boolean;
 }
 
 export interface StrategyEngine {
-  update(bar: SyntheticBar): StrategySignal;
+  update(bar: SyntheticBar, context?: StrategyContext): StrategySignal;
   getIndicatorValues(): Record<string, unknown>;
   readonly settings: any;
   checkExitConditions?(bar: SyntheticBar): {

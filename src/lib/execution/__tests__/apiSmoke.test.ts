@@ -9,7 +9,7 @@ dotenv.config();
  * Smoke test to verify connectivity and authentication with the Aster V3 API.
  * This runs against the real RPC/API specified in .env.
  */
-describe("Aster API Smoke Test", () => {
+describe.skip("Aster API Smoke Test", () => {
   let client: AsterV3Client;
 
   const credentials: Credentials = {

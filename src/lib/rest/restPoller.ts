@@ -58,6 +58,12 @@ export class RestPoller {
     this.intervalId = setInterval(() => {
       this.poll();
     }, intervalMs);
+    
+    // Ensure the interval doesn't block process exit (important for clean shutdowns and tests)
+    if (this.intervalId.unref) {
+      this.intervalId.unref();
+    }
+    
     this.poll();
   }
 

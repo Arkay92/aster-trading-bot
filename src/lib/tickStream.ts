@@ -52,7 +52,10 @@ const defaultParser: MessageParser = (raw) => {
 
       if (price === null) return null;
 
-      return [{ symbol, price, size: size ?? 0, timestamp }];
+      // m is the maker flag. If m is true, the buyer is the maker, so the trade is a SELL.
+      const side: "buy" | "sell" = trade.m ? "sell" : "buy";
+
+      return [{ symbol, price, size: size ?? 0, timestamp, side }];
     }
 
     // Direct trade object (single stream format)
@@ -63,13 +66,11 @@ const defaultParser: MessageParser = (raw) => {
       const timestamp = coerceNumber(payload.T) ?? coerceNumber(payload.timestamp) ?? Date.now();
 
       if (price === null) return null;
+      const side: "buy" | "sell" = payload.m ? "sell" : "buy";
 
-      // If symbol is missing in payload, we can't reliably route it in a multi-stream setup
-      // unless we used the 'stream' property above. 
-      // Most Binance-compatible servers include "s" in the aggTrade payload.
       const finalSymbol = symbol ? (symbol.endsWith("-PERP") ? symbol : `${symbol}-PERP`) : "UNKNOWN";
 
-      return [{ symbol: finalSymbol, price, size: size ?? 0, timestamp }];
+      return [{ symbol: finalSymbol, price, size: size ?? 0, timestamp, side }];
     }
 
     return null;
@@ -213,6 +214,10 @@ export class AsterTickStream {
         }
       }
     }, this.heartbeatIntervalMs);
+
+    if (this.heartbeatInterval.unref) {
+      this.heartbeatInterval.unref();
+    }
   }
 
   private stopHeartbeat(): void {
@@ -236,6 +241,10 @@ export class AsterTickStream {
       this.reconnectTimeout = null;
       this.reconnect();
     }, delay);
+
+    if (this.reconnectTimeout.unref) {
+      this.reconnectTimeout.unref();
+    }
   }
 
   private async reconnect(): Promise<void> {

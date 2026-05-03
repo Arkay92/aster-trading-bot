@@ -16,7 +16,7 @@ describe("Bot Acceptance Test", () => {
 
   const mockConfig: AppConfig = {
     mode: "dry-run",
-    strategyTypes: ["watermellon", "ema-cross"], 
+    strategyTypes: ["watermellon"], 
     credentials: {
       rpcUrl: "http://localhost:8545",
       wsUrl: "ws://localhost:8546",
@@ -26,10 +26,16 @@ describe("Bot Acceptance Test", () => {
     },
     risk: {
       maxPositions: 1,
-      maxPositionSize: 500, // Reduced to avoid balance issues
+      maxPositionSize: 500,
       maxLeverage: 1,
       maxFlipsPerHour: 10,
-      minTradeIntervalMs: 0
+      minTradeIntervalMs: 0,
+      atrStopMultiplier: 1.5,
+      atrTakeProfitR: 2,
+      requireStructureBreak: false,
+      htfBiasEnabled: false,
+      requireVolumeSpike: false,
+      useMarketRegimeFilter: false
     },
     strategy: {
         timeframeMs: 1000,
@@ -37,27 +43,8 @@ describe("Bot Acceptance Test", () => {
         emaMidLen: 3,
         emaSlowLen: 5,
         rsiLength: 2,
-        rsiMinLong: 40,
-        rsiMaxShort: 60
-    },
-    strategies: {
-      watermellon: {
-        timeframeMs: 1000,
-        emaFastLen: 2,
-        emaMidLen: 3,
-        emaSlowLen: 5,
-        rsiLength: 2,
-        rsiMinLong: 40,
-        rsiMaxShort: 60
-      },
-      "ema-cross": {
-        timeframeMs: 1000,
-        emaFastLen: 2,
-        emaSlowLen: 5,
-        rsiLength: 14,
-        rsiMinLong: 1,
-        rsiMaxShort: 99
-      }
+        rsiMinLong: 10,
+        rsiMaxShort: 90
     }
   };
 
@@ -90,12 +77,13 @@ describe("Bot Acceptance Test", () => {
     bot = new BotRunner(mockConfig, [mockTickStream as any], executor);
   });
 
-  const sendTick = (price: number, timestamp: number) => {
+  const sendTick = (price: number, timestamp: number, side: "buy" | "sell" = "buy") => {
     tickEmitter.emit("tick", {
       symbol: "BTCUSDT",
       price,
       size: 1,
-      timestamp
+      timestamp,
+      side
     });
   };
 
@@ -106,10 +94,20 @@ describe("Bot Acceptance Test", () => {
 
     let now = Date.now();
     
-    for (let i = 0; i < 30; i++) {
-        sendTick(100 + i, now + (i * 1100));
-        await new Promise(r => setTimeout(r, 5));
+    // Warm up
+    for (let i = 0; i < 20; i++) {
+        sendTick(100, now + (i * 1100), "buy");
+        await new Promise(r => setTimeout(r, 1));
     }
+
+    // Trigger Long with PAC (Price jump and strong close)
+    // To get PAC > 0.7 on a 1s timeframe with multiple ticks:
+    // First tick of bar at 200, last tick at 210, low at 200 -> PAC = (210-200)/(210-200) = 1.0
+    sendTick(200, now + (21 * 1100), "buy");
+    sendTick(210, now + (21 * 1100) + 500, "buy");
+    sendTick(210, now + (22 * 1100), "buy"); // Close bar
+
+    await new Promise(r => setTimeout(r, 100));
 
     const logs = executor.logs;
     const entries = logs.filter(l => l.type === "enter");

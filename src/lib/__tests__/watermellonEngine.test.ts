@@ -2,17 +2,19 @@ import { WatermellonEngine } from "../engines";
 import { SyntheticBar } from "../types";
 
 describe("WatermellonEngine", () => {
-  const createBar = (price: number): SyntheticBar => ({
+  const createBar = (price: number, side: "buy" | "sell" = "buy", high?: number, low?: number): SyntheticBar => ({
     startTime: Date.now(),
     endTime: Date.now() + 30000,
     open: price,
-    high: price,
-    low: price,
+    high: high ?? price,
+    low: low ?? price,
     close: price,
-    volume: 1
+    volume: 1,
+    buyVolume: side === "buy" ? 1 : 0,
+    sellVolume: side === "sell" ? 1 : 0
   });
 
-  it("should generate a long signal when indicators stack up", () => {
+  it("should generate a long signal when indicators stack up and PAC is met", () => {
     const engine = new WatermellonEngine({
       emaFastLen: 2,
       emaMidLen: 3,
@@ -22,23 +24,20 @@ describe("WatermellonEngine", () => {
       rsiMaxShort: 90
     });
 
-    // Start with 10 bars of 100 to stabilize EMAs at 100.
-    // lastLongLook will be false because RSI=50 and 50 > 10, BUT bullStack will be false (100=100=100).
-    for (let i = 0; i < 10; i++) {
+    // Warm up
+    for (let i = 0; i < 20; i++) {
         engine.update(createBar(100));
     }
     
-    // Now push price up.
-    // update(110) -> Fast=103.3, Mid=102.5, Slow=101.6 -> bullStack=true.
-    // RSI will also be > 10.
-    // So this SHOULD trigger longTrig on the first bar that creates a bull stack.
-    const signal = engine.update(createBar(110));
+    // Jump to 200 with Price Action Confirmation (Close in top 30%)
+    // High=200, Low=180, Close=200 -> closePos = (200-180)/(200-180) = 1.0 (>= 0.7)
+    const signal = engine.update(createBar(200, "buy", 200, 180));
     
     expect(signal).not.toBeNull();
     expect(signal?.type).toBe("long");
   });
 
-  it("should generate a short signal when indicators stack down", () => {
+  it("should generate a short signal when indicators stack down and PAC is met", () => {
     const engine = new WatermellonEngine({
       emaFastLen: 2,
       emaMidLen: 3,
@@ -48,11 +47,13 @@ describe("WatermellonEngine", () => {
       rsiMaxShort: 90
     });
 
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 20; i++) {
         engine.update(createBar(100));
     }
     
-    const signal = engine.update(createBar(90));
+    // Jump to 50 with PAC (Close in bottom 30%)
+    // High=70, Low=50, Close=50 -> closePos = (50-50)/(70-50) = 0.0 (<= 0.3)
+    const signal = engine.update(createBar(50, "sell", 70, 50));
 
     expect(signal).not.toBeNull();
     expect(signal?.type).toBe("short");

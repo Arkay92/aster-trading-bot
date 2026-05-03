@@ -1,5 +1,9 @@
 import type { Indicator } from "../types";
 
+/**
+ * RSI with Wilder's Smoothing (Industry Standard)
+ * Wilder's Smoothing is essentially an EMA with alpha = 1 / length
+ */
 export class RSI implements Indicator {
   private avgGain = 0;
   private avgLoss = 0;
@@ -32,35 +36,31 @@ export class RSI implements Indicator {
 
     this.updateCount++;
 
-    // For initial period, use simple average
     if (this.updateCount <= this.length) {
-      this.avgGain = (this.avgGain * (this.updateCount - 1) + gain) / this.updateCount;
-      this.avgLoss = (this.avgLoss * (this.updateCount - 1) + loss) / this.updateCount;
+      // First 'length' periods use simple average for seeding
+      this.avgGain += gain;
+      this.avgLoss += loss;
+      
+      if (this.updateCount === this.length) {
+        this.avgGain /= this.length;
+        this.avgLoss /= this.length;
+        this.ready = true;
+      }
     } else {
-      // After initial period, use exponential moving average
-      this.avgGain = this.avgGain * (1 - this.alpha) + gain * this.alpha;
-      this.avgLoss = this.avgLoss * (1 - this.alpha) + loss * this.alpha;
+      // Wilder's Smoothing / MMA formula
+      this.avgGain = (this.avgGain * (this.length - 1) + gain) / this.length;
+      this.avgLoss = (this.avgLoss * (this.length - 1) + loss) / this.length;
     }
 
     this.prevValue = value;
 
-    if (!this.ready && this.updateCount >= this.length) {
-      this.ready = true;
-    }
-
-    // Handle edge cases
     if (this.avgLoss === 0) {
-      this.rsiValue = this.avgGain > 0 ? 100 : 50; // If no losses, RSI = 100; if no gains/losses, RSI = 50
-      return this.rsiValue;
+      this.rsiValue = this.avgGain > 0 ? 100 : 50;
+    } else {
+      const rs = this.avgGain / this.avgLoss;
+      this.rsiValue = 100 - 100 / (1 + rs);
     }
 
-    if (this.avgGain === 0) {
-      this.rsiValue = 0; // If no gains, RSI = 0
-      return this.rsiValue;
-    }
-
-    const rs = this.avgGain / this.avgLoss;
-    this.rsiValue = 100 - 100 / (1 + rs);
     return this.rsiValue;
   }
 
@@ -72,4 +72,3 @@ export class RSI implements Indicator {
     return this.rsiValue;
   }
 }
-
