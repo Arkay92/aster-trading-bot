@@ -39,15 +39,18 @@ export type ExecutionSimulatorOptions = {
   missedFillPct?: number;
   latencyBars?: number;
   randomSeed?: number;
+  fundingRate?: number;
 };
 
 export class ExecutionSimulator {
   private balance: number;
   private readonly positions = new Map<string, OpenPosition>();
   private readonly trades: SimulatedTrade[] = [];
-  private readonly pendingSignals: Array<{ symbol: string; signal: NonNullable<StrategySignal>; bar: SyntheticBar; executeAtBar: number; volatilityRegime?: string }> = [];
+  private readonly pendingSignals: Array<{ symbol: string; signal: NonNullable<StrategySignal>; bar: SyntheticBar; executeAtBar: number; volatilityRegime?: string; positionSizeUsdt?: number }> = [];
+  private readonly partialTaken = new Set<string>();
   private equityPeak: number;
   private maxDrawdown = 0;
+  private dailyPnl = 0;
   private barIndex = 0;
   private randomState: number;
 
@@ -62,21 +65,21 @@ export class ExecutionSimulator {
     const due = this.pendingSignals.filter((pending) => pending.executeAtBar <= this.barIndex);
     this.pendingSignals.splice(0, this.pendingSignals.length, ...this.pendingSignals.filter((pending) => pending.executeAtBar > this.barIndex));
     for (const pending of due) {
-      this.executeSignal(pending.symbol, pending.signal, pending.bar, pending.volatilityRegime);
+      this.executeSignal(pending.symbol, pending.signal, pending.bar, pending.volatilityRegime, pending.positionSizeUsdt);
     }
   }
 
-  onSignal(symbol: string, signal: NonNullable<StrategySignal>, bar: SyntheticBar, volatilityRegime?: string): void {
+  onSignal(symbol: string, signal: NonNullable<StrategySignal>, bar: SyntheticBar, volatilityRegime?: string, positionSizeUsdt?: number): void {
     if (this.shouldMissFill()) return;
     const latencyBars = this.options.pessimisticMode ? Math.max(0, this.options.latencyBars ?? 1) : 0;
     if (latencyBars > 0) {
-      this.pendingSignals.push({ symbol, signal, bar, executeAtBar: this.barIndex + latencyBars, volatilityRegime });
+      this.pendingSignals.push({ symbol, signal, bar, executeAtBar: this.barIndex + latencyBars, volatilityRegime, positionSizeUsdt });
       return;
     }
-    this.executeSignal(symbol, signal, bar, volatilityRegime);
+    this.executeSignal(symbol, signal, bar, volatilityRegime, positionSizeUsdt);
   }
 
-  private executeSignal(symbol: string, signal: NonNullable<StrategySignal>, bar: SyntheticBar, volatilityRegime?: string): void {
+  private executeSignal(symbol: string, signal: NonNullable<StrategySignal>, bar: SyntheticBar, volatilityRegime?: string, positionSizeUsdt?: number): void {
     const current = this.positions.get(symbol);
     if (current?.side === signal.type) return;
 
@@ -84,7 +87,7 @@ export class ExecutionSimulator {
       this.close(symbol, bar, `flip-${signal.type}`);
     }
 
-    this.open(symbol, signal.type, bar, signal.reason, volatilityRegime);
+    this.open(symbol, signal.type, bar, signal.reason, volatilityRegime, positionSizeUsdt);
   }
 
   close(symbol: string, bar: SyntheticBar, reason: string): void {
@@ -100,7 +103,9 @@ export class ExecutionSimulator {
     const fees = (notionalIn + notionalOut) * ((this.options.feeRatePct ?? 0) / 100);
     const pnl = grossPnl - fees;
     this.balance += pnl;
+    this.dailyPnl += pnl;
     this.positions.delete(symbol);
+    this.partialTaken.delete(symbol);
     this.updateDrawdown();
 
     this.trades.push({
@@ -121,6 +126,29 @@ export class ExecutionSimulator {
     });
   }
 
+  closePartial(symbol: string, bar: SyntheticBar, reason: string, pct: number): void {
+    const position = this.positions.get(symbol);
+    if (!position || this.partialTaken.has(symbol)) return;
+    const closeSize = position.size * Math.min(1, Math.max(0.01, pct / 100));
+    const originalSize = position.size;
+    position.size = closeSize;
+    this.close(symbol, bar, reason);
+    const remainingSize = originalSize - closeSize;
+    if (remainingSize > 0) {
+      this.positions.set(symbol, { ...position, size: remainingSize });
+      this.partialTaken.add(symbol);
+    }
+  }
+
+  evaluatePartialTakeProfit(symbol: string, bar: SyntheticBar, atr: number, partialPct: number, takeProfitR: number, stopMultiplier: number): void {
+    const position = this.positions.get(symbol);
+    if (!position || atr <= 0 || this.partialTaken.has(symbol)) return;
+    const unrealizedR = position.side === "long"
+      ? (bar.close - position.entryPrice) / (atr * stopMultiplier)
+      : (position.entryPrice - bar.close) / (atr * stopMultiplier);
+    if (unrealizedR >= takeProfitR) this.closePartial(symbol, bar, `partial-tp-${takeProfitR}r`, partialPct);
+  }
+
   closeAll(bar: SyntheticBar, reason: string): void {
     for (const symbol of Array.from(this.positions.keys())) {
       this.close(symbol, bar, reason);
@@ -139,9 +167,17 @@ export class ExecutionSimulator {
     return this.maxDrawdown;
   }
 
-  private open(symbol: string, side: Exclude<PositionSide, "flat">, bar: SyntheticBar, reason: string, volatilityRegime?: string): void {
+  getOpenExposureUsdt(): number {
+    return Array.from(this.positions.values()).reduce((sum, position) => sum + position.entryPrice * position.size, 0);
+  }
+
+  getDailyPnl(): number {
+    return this.dailyPnl;
+  }
+
+  private open(symbol: string, side: Exclude<PositionSide, "flat">, bar: SyntheticBar, reason: string, volatilityRegime?: string, positionSizeUsdt?: number): void {
     const entryPrice = this.applySlippage(bar.close, side === "long" ? "buy" : "sell");
-    const size = this.options.positionSizeUsdt / entryPrice;
+    const size = (positionSizeUsdt ?? this.options.positionSizeUsdt) / entryPrice;
     this.positions.set(symbol, {
       symbol,
       side,

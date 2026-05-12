@@ -13,7 +13,7 @@ type OrderConfirmation = {
 
 export class OrderTracker {
   private pendingOrders = new Map<string, OrderConfirmation>();
-  private readonly confirmationTimeoutMs = 30_000; // 30 seconds
+  constructor(private readonly confirmationTimeoutMs = 30_000) {}
 
   trackOrder(order: TradeInstruction, orderId: string): void {
     this.pendingOrders.set(orderId, {
@@ -27,13 +27,14 @@ export class OrderTracker {
     });
 
     // Auto-expire unconfirmed orders
-    setTimeout(() => {
+    const timeout = setTimeout(() => {
       const pending = this.pendingOrders.get(orderId);
       if (pending && !pending.confirmed) {
         console.warn(`[OrderTracker] Order ${orderId} not confirmed within timeout`);
         this.pendingOrders.delete(orderId);
       }
     }, this.confirmationTimeoutMs);
+    if (timeout.unref) timeout.unref();
   }
 
   confirmOrder(orderId: string): boolean {
@@ -79,6 +80,18 @@ export class OrderTracker {
 
   clearAll(): void {
     this.pendingOrders.clear();
+  }
+
+  pruneStale(maxAgeMs = this.confirmationTimeoutMs): OrderConfirmation[] {
+    const now = Date.now();
+    const stale: OrderConfirmation[] = [];
+    for (const [orderId, order] of this.pendingOrders.entries()) {
+      if (!order.confirmed && now - order.timestamp > maxAgeMs) {
+        stale.push(order);
+        this.pendingOrders.delete(orderId);
+      }
+    }
+    return stale;
   }
 
   async retryOrder(orderId: string, retryFn: () => Promise<void>, maxRetries = 3): Promise<void> {

@@ -161,6 +161,29 @@ export type ExecutionConfig = {
   orderRetryMaxDelayMs?: number;
   maxSpreadPct?: number;
   minBookDepthUsdt?: number;
+  maxOrderAgeMs?: number;
+};
+
+export type ExchangePositionSnapshot = {
+  symbol: string;
+  positionAmt: string;
+  entryPrice?: string;
+  unrealizedProfit?: string;
+};
+
+export type ExchangeOpenOrderSnapshot = {
+  symbol: string;
+  orderId: string | number;
+  side?: "BUY" | "SELL";
+  origQty?: string;
+  price?: string;
+  time?: number;
+  updateTime?: number;
+};
+
+export type LiveReadinessResult = {
+  ok: boolean;
+  checks: Array<{ name: string; ok: boolean; message?: string }>;
 };
 
 export type RiskConfig = {
@@ -208,6 +231,11 @@ export type RiskConfig = {
   maxLongFundingRate?: number;
   minShortFundingRate?: number;
   maxPremiumPct?: number;
+  emergencyFlattenOnRiskHalt?: boolean;
+  tradingDayTimezoneOffsetMinutes?: number;
+  requireFreshPerpSignals?: boolean;
+  perpSignalMaxAgeMs?: number;
+  orderReconcileIntervalMs?: number;
   atrLength?: number;
   atrStopMultiplier?: number;
   atrTakeProfitR?: number;
@@ -291,6 +319,10 @@ export type ExecutionAdapter = {
     indexPrice?: string | number;
     lastFundingRate?: string | number;
   }>;
+  getExchangePositions?(): Promise<ExchangePositionSnapshot[]>;
+  getOpenOrders?(symbol: string): Promise<ExchangeOpenOrderSnapshot[]>;
+  cancelOrder?(symbol: string, orderId: string | number): Promise<void>;
+  runLiveReadinessCheck?(symbols: string[]): Promise<LiveReadinessResult>;
 };
 export interface Indicator {
   update(value: number, ...args: number[]): number | null;

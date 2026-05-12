@@ -18,6 +18,7 @@ type CliArgs = {
   tickSize?: number;
   missedFillPct?: number;
   latencyBars?: number;
+  fundingRate?: number;
 };
 
 async function main() {
@@ -40,6 +41,7 @@ async function main() {
     tickSize: args.tickSize,
     missedFillPct: args.missedFillPct,
     latencyBars: args.latencyBars,
+    fundingRate: args.fundingRate,
   });
   const result = engine.run(bars);
 
@@ -57,6 +59,10 @@ async function main() {
     profitFactor: Number.isFinite(result.metrics.profitFactor) ? result.metrics.profitFactor.toFixed(2) : "Infinity",
     expectancy: result.metrics.expectancy.toFixed(4),
   });
+  if (Object.keys(result.guardStats).length > 0) {
+    console.log("Signals blocked by guard");
+    console.table(result.guardStats);
+  }
   if (Object.keys(result.metrics.byVolatilityRegime).length > 0) {
     console.log("PnL by volatility regime");
     console.table(result.metrics.byVolatilityRegime);
@@ -99,6 +105,7 @@ function parseArgs(args: string[]): CliArgs {
     else if (key === "tick-size") parsed.tickSize = Number(value);
     else if (key === "missed-fill-pct") parsed.missedFillPct = Number(value);
     else if (key === "latency-bars") parsed.latencyBars = Number(value);
+    else if (key === "funding-rate") parsed.fundingRate = Number(value);
   }
   return parsed;
 }

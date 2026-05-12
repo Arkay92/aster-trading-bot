@@ -28,6 +28,16 @@ export type V3PositionRisk = {
   positionSide: string;
 };
 
+export type V3OpenOrder = {
+  symbol: string;
+  orderId: string | number;
+  side?: "BUY" | "SELL";
+  origQty?: string;
+  price?: string;
+  time?: number;
+  updateTime?: number;
+};
+
 export type V3Balance = {
   asset: string;
   balance: string;
@@ -101,8 +111,8 @@ export class AsterV3Client {
     return this.signedRequest("DELETE", "/fapi/v3/order", { symbol, orderId });
   }
 
-  async getOpenOrders(symbol: string): Promise<any[]> {
-    return this.signedRequest("GET", "/fapi/v3/openOrders", { symbol }) as Promise<any[]>;
+  async getOpenOrders(symbol: string): Promise<V3OpenOrder[]> {
+    return this.signedRequest("GET", "/fapi/v3/openOrders", { symbol }) as Promise<V3OpenOrder[]>;
   }
 
   async changeLeverage(symbol: string, leverage: number): Promise<unknown> {

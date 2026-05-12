@@ -104,13 +104,13 @@ Arguments:
 - `--latency-bars`: number of bars to delay signal execution in pessimistic mode.
 
 Backtesting uses the configured `STRATEGY_TYPE` and strategy parameters from `.env`, but forces paper-style execution so it never sends exchange orders.
-Backtest output includes expectancy and PnL grouped by volatility regime.
+Backtest output includes expectancy, PnL grouped by volatility regime, and guard-block counts. The simulator now approximates spread/funding filters, portfolio exposure caps, daily loss halts, cooldowns, ATR sizing, and partial take-profit behavior.
 
 ### Current Backtest Limits
 
 The backtest module is useful for strategy screening, but it is not a full live-execution replica yet. It does not fully model:
 
-- Live funding and premium filters from exchange polling.
+- Live funding and premium freshness from exchange polling.
 - The bot runner's dynamic ATR stop lifecycle and partial-take-profit state.
 - Multi-strategy ownership and takeover timing.
 - Exchange-specific behavior such as lot-size rounding, rejected reduce-only orders, leverage caps, rate limits, and order-book fill quality.
@@ -146,6 +146,12 @@ MAX_ATR_PCT=3.0
 MAX_LONG_FUNDING_RATE=0.0005
 MIN_SHORT_FUNDING_RATE=-0.0005
 MAX_SPREAD_PCT=0.08
+REQUIRE_FRESH_PERP_SIGNALS=true
+PERP_SIGNAL_MAX_AGE_MS=600000
+EMERGENCY_FLATTEN_ON_RISK_HALT=true
+TRADING_DAY_TIMEZONE_OFFSET_MINUTES=0
+ORDER_RECONCILE_INTERVAL_MS=30000
+MAX_ORDER_AGE_MS=300000
 # MIN_BOOK_DEPTH_USDT=1000
 ```
 
@@ -196,11 +202,17 @@ npx tsc --noEmit
 ## Live Safety Checks
 
 - Startup waits for both balance and the first REST position reconciliation before tick streams begin.
+- Live mode runs a preflight check before start and refuses to run if balance, positions, symbol/premium, or open-order checks fail.
 - The websocket subscribes to `aggTrade` and `bookTicker`; strategy bars use trades, while bid/ask quotes feed spread checks.
 - Live entries are blocked by slippage, spread, optional book-depth, volatility, funding, premium, portfolio exposure, daily loss, and drawdown guards.
 - Duplicate live entry/close orders for the same symbol are blocked while an order is already in flight.
+- Risk halts persist across restarts and can emergency-flatten open positions when `EMERGENCY_FLATTEN_ON_RISK_HALT=true`.
+- The trading-day reset uses `TRADING_DAY_TIMEZONE_OFFSET_MINUTES`; the default is UTC.
+- Funding/premium data must be fresh when `REQUIRE_FRESH_PERP_SIGNALS=true`.
+- A reconciliation loop compares local state with exchange positions/open orders and cancels stale orders older than `MAX_ORDER_AGE_MS`.
 - Reduce-only close failures fail closed; the bot does not retry a live close as non-reduce-only while REST still shows an open position.
 - PnL snapshots are logged every minute with balance, daily realized PnL, unrealized PnL, total PnL, drawdown, and active position count.
+- Performance metrics include signal counts, entries, and block reasons so you can separate weak signal quality from risk filters doing their job.
 
 ## Project Structure
 

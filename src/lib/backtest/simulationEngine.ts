@@ -23,6 +23,7 @@ export type BacktestOptions = Partial<ExecutionSimulatorOptions>;
 export type BacktestResult = {
   metrics: BacktestMetrics;
   trades: SimulatedTrade[];
+  guardStats: Record<string, number>;
 };
 
 export class SimulationEngine {
@@ -31,6 +32,8 @@ export class SimulationEngine {
   private readonly recentBars = new Map<string, SyntheticBar[]>();
   private readonly startingBalance: number;
   private readonly options: BacktestOptions;
+  private readonly guardStats = new Map<string, number>();
+  private readonly cooldownUntilBar = new Map<string, number>();
 
   constructor(
     private readonly config: AppConfig,
@@ -63,9 +66,23 @@ export class SimulationEngine {
       const context = this.getContext(symbol, bar);
       const signal = engine.update(bar, context);
       this.pushRecentBar(symbol, bar);
+      this.executor.evaluatePartialTakeProfit(
+        symbol,
+        bar,
+        this.getAverageRange(symbol),
+        this.config.risk.partialTpPercent ?? 50,
+        this.config.risk.atrTakeProfitR ?? 1.5,
+        this.config.risk.atrStopMultiplier ?? 1.3,
+      );
 
       if (signal) {
-        this.executor.onSignal(symbol, signal, bar, this.getVolatilityRegime(symbol, bar.close));
+        const blockReason = this.getBacktestBlockReason(symbol, signal.type, bar);
+        if (blockReason) {
+          this.recordGuard(blockReason);
+        } else {
+          this.executor.onSignal(symbol, signal, bar, this.getVolatilityRegime(symbol, bar.close), this.computeBacktestPositionSize(symbol, bar.close));
+          this.cooldownUntilBar.set(symbol, this.executorBarIndex() + Math.ceil((this.config.risk.minTradeIntervalMs ?? 0) / Math.max(1, this.getTimeframeMs())));
+        }
         engine.onPositionChange?.(signal.type);
       }
 
@@ -85,7 +102,61 @@ export class SimulationEngine {
     return {
       trades,
       metrics: calculateMetrics(trades, this.startingBalance, endingBalance, this.executor.getMaxDrawdown()),
+      guardStats: Object.fromEntries(this.guardStats),
     };
+  }
+
+  private getBacktestBlockReason(symbol: string, side: "long" | "short", bar: SyntheticBar): string | null {
+    const syntheticSpreadPct = this.options.pessimisticMode ? Math.max(this.options.slippagePct ?? 0, this.config.risk.execution?.maxSpreadPct ?? 0) : this.options.slippagePct ?? 0;
+    if (this.config.risk.execution?.maxSpreadPct && syntheticSpreadPct > this.config.risk.execution.maxSpreadPct) return "spread-guard";
+
+    const volatilityRegime = this.getVolatilityRegime(symbol, bar.close);
+    if (volatilityRegime === "too-low" || volatilityRegime === "extreme") return "volatility-regime";
+
+    const fundingRate = this.options.fundingRate ?? 0;
+    if (side === "long" && fundingRate > (this.config.risk.maxLongFundingRate ?? 0.0005)) return "funding-long";
+    if (side === "short" && fundingRate < (this.config.risk.minShortFundingRate ?? -0.0005)) return "funding-short";
+
+    const maxExposure = this.config.risk.maxPortfolioExposureUsdt ?? this.config.risk.maxPositionSize * (this.config.risk.maxPositions ?? 1);
+    const orderExposure = this.computeBacktestPositionSize(symbol, bar.close) * bar.close;
+    if (this.executor.getOpenExposureUsdt() + orderExposure > maxExposure) return "portfolio-exposure";
+
+    if (this.config.risk.maxDailyLossPct && this.executor.getDailyPnl() <= -(this.startingBalance * (this.config.risk.maxDailyLossPct / 100))) return "daily-loss-halt";
+
+    const cooldownUntil = this.cooldownUntilBar.get(symbol) || 0;
+    if (this.executorBarIndex() < cooldownUntil) return "cooldown";
+
+    return null;
+  }
+
+  private computeBacktestPositionSize(symbol: string, price: number): number {
+    const maxNotional = this.options.positionSizeUsdt ?? this.config.risk.maxPositionSize;
+    const avgRange = this.getAverageRange(symbol);
+    const riskUsd = this.startingBalance * ((this.config.risk.riskPerTradePct ?? 1) / 100);
+    if (!avgRange || avgRange <= 0 || price <= 0) return maxNotional;
+    const stopDistance = avgRange * (this.config.risk.atrStopMultiplier ?? 1.5);
+    const riskSizedNotional = (riskUsd / stopDistance) * price;
+    return Math.min(maxNotional, riskSizedNotional);
+  }
+
+  private getAverageRange(symbol: string): number {
+    const recent = this.recentBars.get(symbol) ?? [];
+    const sample = recent.slice(-14);
+    if (sample.length === 0) return 0;
+    return sample.reduce((sum, bar) => sum + (bar.high - bar.low), 0) / sample.length;
+  }
+
+  private recordGuard(reason: string): void {
+    this.guardStats.set(reason, (this.guardStats.get(reason) || 0) + 1);
+  }
+
+  private executorBarIndex(): number {
+    return this.executor.getTrades().length + Array.from(this.recentBars.values()).reduce((sum, bars) => sum + bars.length, 0);
+  }
+
+  private getTimeframeMs(): number {
+    const strategy = this.config.strategy as { timeframeMs?: number };
+    return strategy.timeframeMs ?? 60_000;
   }
 
   private getEngine(symbol: string): StrategyEngine {

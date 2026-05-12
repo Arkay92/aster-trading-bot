@@ -5,7 +5,22 @@ import type { LocalPositionState } from "./positionState";
 type PersistedState = {
   positions: Record<string, LocalPositionState>;
   lastBarCloseTime: number;
+  runtimeRisk?: RuntimeRiskState;
   timestamp: number;
+};
+
+export type RuntimeRiskState = {
+  dayKey: string;
+  dailyRealizedPnl: number;
+  dailyStartBalance: number;
+  dailyPeakPnl: number;
+  consecutiveLosses: number;
+  riskHalted: boolean;
+  lastRiskProcessedTradeId?: string;
+  flipHistory?: number[];
+  symbolTradeCountInLastHour?: Record<string, number[]>;
+  lastEntryAt?: Record<string, number>;
+  cooldownUntil?: Record<string, number>;
 };
 
 export class StatePersistence {
@@ -15,7 +30,7 @@ export class StatePersistence {
     this.stateFile = join(dataDir, "bot-state.json");
   }
 
-  save(state: { positions: Map<string, LocalPositionState>; lastBarCloseTime: number }): void {
+  save(state: { positions: Map<string, LocalPositionState>; lastBarCloseTime: number; runtimeRisk?: RuntimeRiskState }): void {
     try {
       const dir = dirname(this.stateFile);
       if (!existsSync(dir)) {
@@ -25,6 +40,7 @@ export class StatePersistence {
       const persisted: PersistedState = {
         positions: Object.fromEntries(state.positions),
         lastBarCloseTime: state.lastBarCloseTime,
+        runtimeRisk: state.runtimeRisk,
         timestamp: Date.now(),
       };
       
@@ -34,7 +50,7 @@ export class StatePersistence {
     }
   }
 
-  load(): { positions: Map<string, LocalPositionState>; lastBarCloseTime: number } | null {
+  load(): { positions: Map<string, LocalPositionState>; lastBarCloseTime: number; runtimeRisk?: RuntimeRiskState } | null {
     try {
       if (!existsSync(this.stateFile)) {
         return null;
@@ -43,7 +59,7 @@ export class StatePersistence {
       const persisted: PersistedState = JSON.parse(content);
       
       const age = Date.now() - persisted.timestamp;
-      if (age > 60 * 60 * 1000) {
+      if (age > 48 * 60 * 60 * 1000) {
         console.log("[StatePersistence] State too old, ignoring");
         return null;
       }
@@ -51,6 +67,7 @@ export class StatePersistence {
       return {
         positions: new Map(Object.entries(persisted.positions || {})),
         lastBarCloseTime: persisted.lastBarCloseTime,
+        runtimeRisk: persisted.runtimeRisk,
       };
     } catch (error) {
       console.error("[StatePersistence] Failed to load state", error);

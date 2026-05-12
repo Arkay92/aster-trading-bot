@@ -7,6 +7,7 @@ dotenv.config({ path: resolve(process.cwd(), ".env") });
 import { BotRunner } from "@/lib/bot/botRunner";
 import { loadConfig } from "@/lib/config";
 import { DryRunExecutor, LiveExecutor, PaperExecutor } from "@/lib/execution/executors";
+import type { ExecutionAdapter } from "@/lib/types";
 import { initFileLogging } from "@/lib/logging/fileLogger";
 import { BotLock } from "@/lib/runtime/botLock";
 import { AsterTickStream } from "@/lib/tickStream";
@@ -76,7 +77,7 @@ async function main() {
 
   const tickStreams = [new AsterTickStream(config.credentials.wsUrl, config.credentials.pairSymbols)];
 
-  let executor;
+  let executor: ExecutionAdapter;
   if (config.mode === "live") {
     executor = new LiveExecutor(config.credentials, config);
   } else if (config.mode === "paper") {
@@ -89,6 +90,15 @@ async function main() {
   if (config.mode === "live") {
     console.log("Using LiveExecutor - REAL trades will be executed on AsterDEX");
     console.log(`API Endpoint: ${config.credentials.rpcUrl}`);
+    const readiness = await executor.runLiveReadinessCheck?.(config.credentials.pairSymbols);
+    if (!readiness?.ok) {
+      console.error("Live readiness check failed:");
+      for (const check of readiness?.checks || []) {
+        console.error(`- ${check.ok ? "OK" : "FAIL"} ${check.name}${check.message ? `: ${check.message}` : ""}`);
+      }
+      throw new Error("Live readiness check failed; refusing to start live bot");
+    }
+    console.log("Live readiness check passed");
   } else if (config.mode === "paper") {
     console.log(`Using PaperExecutor - simulated trades against virtual balance of ${config.paperTrading?.startingBalance ?? 10000} USDT`);
   } else {

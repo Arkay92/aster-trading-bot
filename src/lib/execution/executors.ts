@@ -1,4 +1,4 @@
-import type { TradeInstruction, ExecutionAdapter, Credentials, Tick } from "../types";
+import type { ExchangeOpenOrderSnapshot, ExchangePositionSnapshot, LiveReadinessResult, TradeInstruction, ExecutionAdapter, Credentials, Tick } from "../types";
 import { SignedRequestLock } from "./signedRequestLock";
 import { AsterV3Client } from "./asterV3Client";
 
@@ -160,6 +160,64 @@ export class LiveExecutor extends BaseExecutor implements ExecutionAdapter {
 
   async getPremiumIndex(symbol?: string): Promise<{ markPrice?: string | number; indexPrice?: string | number; lastFundingRate?: string | number }> {
     return this.v3.getPremiumIndex(symbol);
+  }
+
+  async getExchangePositions(): Promise<ExchangePositionSnapshot[]> {
+    const account = await SignedRequestLock.run(async () => this.v3.getAccount());
+    return (account.positions || []).map((position) => ({
+      symbol: position.symbol,
+      positionAmt: position.positionAmt,
+      entryPrice: position.entryPrice,
+      unrealizedProfit: position.unRealizedProfit ?? position.unrealizedProfit ?? position.unrealisedProfit ?? "0",
+    }));
+  }
+
+  async getOpenOrders(symbolArg: string): Promise<ExchangeOpenOrderSnapshot[]> {
+    const symbol = this.normalizeSymbol(symbolArg);
+    return SignedRequestLock.run(async () => this.v3.getOpenOrders(symbol));
+  }
+
+  async cancelOrder(symbolArg: string, orderId: string | number): Promise<void> {
+    const symbol = this.normalizeSymbol(symbolArg);
+    await SignedRequestLock.run(async () => this.v3.cancelOrder(symbol, String(orderId)));
+  }
+
+  async runLiveReadinessCheck(symbols: string[]): Promise<LiveReadinessResult> {
+    const checks: LiveReadinessResult["checks"] = [];
+    const add = (name: string, ok: boolean, message?: string) => checks.push({ name, ok, message });
+
+    try {
+      const balance = await SignedRequestLock.run(async () => this.v3.getBalance());
+      const usdt = balance.find((item) => item.asset?.toUpperCase() === "USDT");
+      add("balance", Boolean(usdt), usdt ? `USDT available=${usdt.availableBalance || usdt.balance}` : "USDT balance not found");
+    } catch (error) {
+      add("balance", false, String(error));
+    }
+
+    try {
+      const positions = await this.getExchangePositions();
+      add("positions", Array.isArray(positions), `${positions.length} position rows`);
+    } catch (error) {
+      add("positions", false, String(error));
+    }
+
+    for (const rawSymbol of symbols) {
+      const symbol = this.normalizeSymbol(rawSymbol);
+      try {
+        await this.v3.getPremiumIndex(symbol);
+        add(`symbol:${symbol}`, true, "premium index fetched");
+      } catch (error) {
+        add(`symbol:${symbol}`, false, String(error));
+      }
+      try {
+        await SignedRequestLock.run(async () => this.v3.getOpenOrders(symbol));
+        add(`orders:${symbol}`, true, "open orders fetched");
+      } catch (error) {
+        add(`orders:${symbol}`, false, String(error));
+      }
+    }
+
+    return { ok: checks.every((check) => check.ok), checks };
   }
 
   private normalizeSymbol(symbol: string): string {

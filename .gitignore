@@ -32,3 +32,4 @@ data
 log
 *.lock
 *.tsbuildinfo
+ecosystem.config.zip

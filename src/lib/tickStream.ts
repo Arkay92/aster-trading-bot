@@ -201,8 +201,11 @@ export class AsterTickStream {
     });
 
     this.ws.on("error", (err) => {
+      if (this.intentionalClose) return;
       console.error(`[TickStream] WebSocket error:`, err);
-      this.emitter.emit("error", err as Error);
+      if (this.emitter.listenerCount("error") > 0) {
+        this.emitter.emit("error", err as Error);
+      }
     });
 
     this.ws.on("ping", () => {
@@ -290,9 +293,17 @@ export class AsterTickStream {
     await new Promise<void>((resolve) => {
       if (!this.ws) return resolve();
       const ws = this.ws;
-      ws.once("close", () => resolve());
-      this.ws.close();
       this.ws = null;
+
+      if (ws.readyState === WebSocket.CLOSED) return resolve();
+
+      if (ws.readyState === WebSocket.CONNECTING) {
+        ws.terminate();
+        return resolve();
+      }
+
+      ws.once("close", () => resolve());
+      ws.close();
     });
   }
 

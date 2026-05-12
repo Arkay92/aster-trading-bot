@@ -11,6 +11,7 @@ import { RestPoller } from "../rest/restPoller";
 import { PositionStateManager } from "../state/positionState";
 import { OrderTracker } from "../execution/orderTracker";
 import { StatePersistence } from "../state/statePersistence";
+import type { RuntimeRiskState } from "../state/statePersistence";
 import { KeyManager } from "../security/keyManager";
 import { ADX } from "../indicators/adx";
 import { ATR } from "../indicators/atr";
@@ -109,6 +110,7 @@ export class BotRunner {
   
   private fundingBySymbol = new Map<string, number>();
   private premiumBySymbol = new Map<string, number>();
+  private perpSignalsUpdatedAt = new Map<string, number>();
   private invalidPerpSignalSymbols = new Set<string>();
   private pendingBreakouts = new Map<string, {
     direction: "long" | "short";
@@ -119,6 +121,12 @@ export class BotRunner {
   }>();
   private fundingPollInterval: NodeJS.Timeout | null = null;
   private pnlLogInterval: NodeJS.Timeout | null = null;
+  private reconciliationInterval: NodeJS.Timeout | null = null;
+  private signalStats = {
+    fired: 0,
+    entered: 0,
+    blocked: new Map<string, number>(),
+  };
 
   constructor(
     private readonly config: AppConfig,
@@ -164,7 +172,7 @@ export class BotRunner {
     
     this.restPoller = config.mode === "live" ? new RestPoller(config.credentials) : undefined;
     this.stateManager = new PositionStateManager();
-    this.orderTracker = new OrderTracker();
+    this.orderTracker = new OrderTracker(config.risk.execution?.maxOrderAgeMs ?? 30_000);
     this.statePersistence = new StatePersistence();
     this.loadWarmState();
   }
@@ -182,6 +190,7 @@ export class BotRunner {
           this.positions.set(symbol, { side: posState.side, size: posState.size, symbol, entryPrice: posState.avgEntry > 0 ? posState.avgEntry : undefined });
         }
       }
+      if (saved.runtimeRisk) this.restoreRuntimeRisk(saved.runtimeRisk);
       this.log("Warm state loaded", { activePositions: this.stateManager.getActivePositionCount(), lastBarClose: new Date(saved.lastBarCloseTime).toISOString() });
     }
   }
@@ -190,7 +199,37 @@ export class BotRunner {
     if (this.config.mode !== "live" && this.config.mode !== "paper") return;
     const states = this.stateManager.getAllStates();
     const latestTime = Math.max(...Array.from(this.lastBarCloseTimes.values()), 0);
-    this.statePersistence.save({ positions: states, lastBarCloseTime: latestTime });
+    this.statePersistence.save({ positions: states, lastBarCloseTime: latestTime, runtimeRisk: this.getRuntimeRiskState() });
+  }
+
+  private restoreRuntimeRisk(state: RuntimeRiskState): void {
+    this.riskDayKey = state.dayKey || this.riskDayKey;
+    this.dailyRealizedPnl = state.dailyRealizedPnl || 0;
+    this.dailyStartBalance = state.dailyStartBalance || 0;
+    this.dailyPeakPnl = state.dailyPeakPnl || 0;
+    this.consecutiveLosses = state.consecutiveLosses || 0;
+    this.riskHalted = Boolean(state.riskHalted);
+    this.lastRiskProcessedTradeId = state.lastRiskProcessedTradeId || "";
+    this.flipHistory = state.flipHistory || [];
+    this.symbolTradeCountInLastHour = new Map(Object.entries(state.symbolTradeCountInLastHour || {}));
+    this.lastEntryAt = new Map(Object.entries(state.lastEntryAt || {}).map(([key, value]) => [key, Number(value)]));
+    this.cooldownUntil = new Map(Object.entries(state.cooldownUntil || {}).map(([key, value]) => [key, Number(value)]));
+  }
+
+  private getRuntimeRiskState(): RuntimeRiskState {
+    return {
+      dayKey: this.riskDayKey,
+      dailyRealizedPnl: this.dailyRealizedPnl,
+      dailyStartBalance: this.dailyStartBalance,
+      dailyPeakPnl: this.dailyPeakPnl,
+      consecutiveLosses: this.consecutiveLosses,
+      riskHalted: this.riskHalted,
+      lastRiskProcessedTradeId: this.lastRiskProcessedTradeId,
+      flipHistory: this.flipHistory,
+      symbolTradeCountInLastHour: Object.fromEntries(this.symbolTradeCountInLastHour),
+      lastEntryAt: Object.fromEntries(this.lastEntryAt),
+      cooldownUntil: Object.fromEntries(this.cooldownUntil),
+    };
   }
 
   async start() {
@@ -220,11 +259,12 @@ export class BotRunner {
       const waitUntil = Date.now() + 15_000;
       while (!this.initialBalanceFetched && Date.now() < waitUntil) await new Promise(r => setTimeout(r, 250));
     }
-    this.resetDailyRiskWindow();
+    this.ensureDailyRiskWindow();
     for (const stream of this.tickStreams) await stream.start();
     this.startPulse();
     this.startFundingPoll();
     this.startPnlLog();
+    this.startReconciliationLoop();
   }
 
   private startFundingPoll() {
@@ -282,6 +322,7 @@ export class BotRunner {
 
       this.fundingBySymbol.set(symbol, funding);
       this.premiumBySymbol.set(symbol, ((mark - index) / index) * 100);
+      this.perpSignalsUpdatedAt.set(symbol, Date.now());
     } catch (e) {
       if (String(e).includes("-1121")) {
         this.invalidPerpSignalSymbols.add(symbol);
@@ -314,10 +355,63 @@ export class BotRunner {
     if (this.pulseInterval) { clearInterval(this.pulseInterval); this.pulseInterval = null; }
   }
 
+  private startReconciliationLoop() {
+    this.stopReconciliationLoop();
+    if (this.config.mode !== "live") return;
+    const intervalMs = this.config.risk.orderReconcileIntervalMs ?? 30_000;
+    const run = () => void this.reconcileExchangeState().catch((error) => this.log("Exchange reconciliation failed", { error: String(error) }));
+    run();
+    this.reconciliationInterval = setInterval(run, intervalMs);
+    if (this.reconciliationInterval.unref) this.reconciliationInterval.unref();
+  }
+
+  private stopReconciliationLoop() {
+    if (this.reconciliationInterval) {
+      clearInterval(this.reconciliationInterval);
+      this.reconciliationInterval = null;
+    }
+  }
+
+  private async reconcileExchangeState() {
+    const maxAgeMs = this.config.risk.execution?.maxOrderAgeMs ?? 5 * 60_000;
+    const staleLocal = this.orderTracker.pruneStale(maxAgeMs);
+    for (const order of staleLocal) {
+      this.log("Pruned stale local pending order", { orderId: order.orderId, symbol: order.symbol, ageMs: Date.now() - order.timestamp });
+    }
+
+    const exchangePositions = await this.executor.getExchangePositions?.();
+    if (exchangePositions) {
+      for (const position of exchangePositions) {
+        const symbol = this.toPerpSymbol(position.symbol);
+        this.stateManager.updateFromRest(symbol, {
+          positionAmt: position.positionAmt,
+          entryPrice: position.entryPrice || "0",
+          unrealizedProfit: position.unrealizedProfit || "0",
+        });
+        this.syncPositionFromState(symbol);
+      }
+    }
+
+    for (const symbol of this.barBuilders.keys()) {
+      const openOrders = await this.executor.getOpenOrders?.(symbol);
+      if (!openOrders) continue;
+      const now = Date.now();
+      for (const order of openOrders) {
+        const orderTime = order.updateTime ?? order.time;
+        if (orderTime && now - orderTime > maxAgeMs) {
+          await this.executor.cancelOrder?.(symbol, order.orderId);
+          this.log("Cancelled stale exchange open order", { symbol, orderId: order.orderId, ageMs: now - orderTime });
+        }
+      }
+    }
+    this.saveState();
+  }
+
   async stop() {
     this.stopPulse();
     this.stopFundingPoll();
     this.stopPnlLog();
+    this.stopReconciliationLoop();
     this.restPoller?.stop();
     for (const stream of this.tickStreams) await stream.stop();
     this.unsubscribers.forEach(off => off());
@@ -469,7 +563,7 @@ export class BotRunner {
 
   private async handleBarClose(symbol: string, bar: SyntheticBar) {
     this.ensureDailyRiskWindow();
-    this.enforcePortfolioRiskWindow();
+    await this.enforcePortfolioRiskWindow();
     if (this.riskHalted) return;
     const lastTime = this.lastBarCloseTimes.get(symbol) || 0;
     if (bar.endTime <= lastTime) return;
@@ -521,6 +615,7 @@ export class BotRunner {
     this.processedSignals.add(signalKey);
     if (this.processedSignals.size > 500) this.processedSignals.delete(this.processedSignals.values().next().value!);
     this.logSignalDecision(symbol, selected.strategyType, selected.signal, bar, context);
+    this.signalStats.fired++;
     this.emitter.emit("signal", selected.signal, bar);
     await this.applySignal(symbol, selected.strategyType, selected.signal, bar, false);
   }
@@ -748,6 +843,7 @@ export class BotRunner {
       this.lastTradeAt.set(symbol, Date.now());
       this.recordTradeTimestamp(symbol);
       this.recordFlip(order.timestamp);
+      this.signalStats.entered++;
       this.saveState();
       this.emitter.emit("position", pos);
     } catch (e) { this.log(`Entry failed on ${symbol}`, { error: String(e) }); }
@@ -802,6 +898,7 @@ export class BotRunner {
   }
 
   private logEntryBlock(symbol: string, reason: string, payload?: Record<string, unknown>) {
+    this.signalStats.blocked.set(reason, (this.signalStats.blocked.get(reason) || 0) + 1);
     const key = `${symbol}:${reason}`;
     const now = Date.now();
     const last = this.entryBlockLogAt.get(key) || 0;
@@ -832,10 +929,11 @@ export class BotRunner {
 
       if (unrealizedR >= partialTPAtR && !this.partialProfitTaken.has(symbol)) {
         if (this.symbolCloseLocks.has(symbol)) return;
-        this.log(`Partial TP (50%) on ${symbol} at ${partialTPAtR}R`);
+        const partialPct = Math.min(100, Math.max(1, this.config.risk.partialTpPercent ?? 50));
+        this.log(`Partial TP (${partialPct}%) on ${symbol} at ${partialTPAtR}R`);
         this.symbolCloseLocks.add(symbol);
         try {
-          await this.executor.closePosition(symbol, `partial-tp-${partialTPAtR}r`, { size: position.size * 0.5, price: close });
+          await this.executor.closePosition(symbol, `partial-tp-${partialTPAtR}r`, { size: position.size * (partialPct / 100), price: close });
           this.partialProfitTaken.add(symbol);
           this.dynamicStopBySymbol.set(symbol, position.entryPrice); // Breakeven
         } catch (error) {
@@ -921,6 +1019,11 @@ export class BotRunner {
     
     // Funding Rate Filter (only in live mode with populated data)
     const funding = this.fundingBySymbol.get(symbol);
+    if (this.config.mode === "live" && this.config.risk.requireFreshPerpSignals) {
+      const updatedAt = this.perpSignalsUpdatedAt.get(symbol) || 0;
+      const maxAgeMs = this.config.risk.perpSignalMaxAgeMs ?? 10 * 60_000;
+      if (!updatedAt || Date.now() - updatedAt > maxAgeMs) return false;
+    }
     if (funding !== undefined) {
       if (signal.type === "long" && funding > (this.config.risk.maxLongFundingRate ?? 0.0005)) return false;
       if (signal.type === "short" && funding < (this.config.risk.minShortFundingRate ?? -0.0005)) return false;
@@ -1004,7 +1107,10 @@ export class BotRunner {
   private getStrategyConfig(type: StrategyType) { return (this.config.strategies?.[type] || this.config.strategy) as any; }
   private getActiveStrategyPositionCount(type: StrategyType) { return Array.from(this.positions.values()).filter(p => p.side !== "flat" && p.strategy === type).length; }
   private getGlobalActivePositionCount() { return Array.from(this.positions.values()).filter(p => p.side !== "flat").length; }
-  private getRiskDayKey(ts = Date.now()) { return new Date(ts).toISOString().slice(0, 10); }
+  private getRiskDayKey(ts = Date.now()) {
+    const offsetMinutes = this.config.risk.tradingDayTimezoneOffsetMinutes ?? 0;
+    return new Date(ts + offsetMinutes * 60_000).toISOString().slice(0, 10);
+  }
   private resetDailyRiskWindow() {
     this.riskDayKey = this.getRiskDayKey();
     this.dailyStartBalance = this.usdtBalance;
@@ -1012,9 +1118,10 @@ export class BotRunner {
     this.dailyPeakPnl = 0;
     this.consecutiveLosses = 0;
     this.riskHalted = false;
+    this.saveState();
   }
   private ensureDailyRiskWindow() { if (this.getRiskDayKey() !== this.riskDayKey) this.resetDailyRiskWindow(); }
-  private enforcePortfolioRiskWindow() {
+  private async enforcePortfolioRiskWindow() {
     if (this.riskHalted) return;
     const unrealizedPnl = this.getUnrealizedPnl();
     const totalDailyPnl = this.dailyRealizedPnl + unrealizedPnl;
@@ -1028,7 +1135,7 @@ export class BotRunner {
       maxDrawdownUsdt = Math.min(maxDrawdownUsdt, this.dailyStartBalance * (this.config.risk.maxDrawdownPct / 100));
     }
     if (totalDailyPnl <= -maxDailyLossUsdt || currentDrawdown >= maxDrawdownUsdt) {
-      this.riskHalted = true;
+      await this.haltTrading("portfolio-risk-guard");
       this.log("Trading halted by portfolio risk guard", { totalDailyPnl: this.round(totalDailyPnl), unrealizedPnl: this.round(unrealizedPnl), currentDrawdown: this.round(currentDrawdown), maxDailyLossUsdt: this.round(maxDailyLossUsdt), maxDrawdownUsdt: this.round(maxDrawdownUsdt) });
     }
   }
@@ -1058,8 +1165,21 @@ export class BotRunner {
       currentDrawdown >= maxDrawdownUsdt ||
       this.consecutiveLosses >= (this.config.risk.maxConsecutiveLosses || 999)
     ) {
-      this.riskHalted = true;
+      void this.haltTrading("daily-risk-guard");
       this.log(`Trading halted for the day. Daily PnL: ${this.dailyRealizedPnl}, Drawdown: ${currentDrawdown}, Consec Losses: ${this.consecutiveLosses}`);
+    }
+    this.saveState();
+  }
+  private async haltTrading(reason: string) {
+    if (this.riskHalted) return;
+    this.riskHalted = true;
+    this.saveState();
+    if (!this.config.risk.emergencyFlattenOnRiskHalt) return;
+    this.log("Emergency flatten triggered by risk halt", { reason });
+    for (const position of Array.from(this.positions.values())) {
+      if (position.side === "flat" || !position.symbol) continue;
+      const tick = this.executor.getCurrentTick?.(position.symbol);
+      await this.closePosition(position.symbol, `risk-halt-${reason}`, { price: tick?.price ?? position.entryPrice ?? 0 });
     }
   }
   getPerformanceMetrics() {
@@ -1074,6 +1194,11 @@ export class BotRunner {
         peakPnl: this.dailyPeakPnl,
         drawdown: Math.max(0, this.dailyPeakPnl - this.dailyRealizedPnl),
         halted: this.riskHalted,
+      },
+      signals: {
+        fired: this.signalStats.fired,
+        entered: this.signalStats.entered,
+        blocked: Object.fromEntries(this.signalStats.blocked),
       },
     };
   }
